@@ -1,234 +1,302 @@
 /**
- * HOLON BRAIN ROUTER — Cloudflare Worker
- * =======================================
- * Adaptacyjny routing jak zdrowy organizm:
+ * HOLON BRAIN ROUTER v2 — Zero-Exposure Architecture
+ * ====================================================
  *
- *  REFLEX       → Ollama qwen2.5:0.5b (lokalnie) — łuk odruchowy, <200ms, €0
- *  INTUITIVE    → Claude Haiku         — System 1, wzorce, <1s, ~€0.00005
- *  DELIBERATE   → Claude Sonnet        — System 2, głębokie, 2-5s, ~€0.001
- *  COLLECTIVE   → Sonnet + multi-step  — inteligencja zbiorowa, 5-15s
+ * ZASADA: prawdziwe klucze żyją TYLKO w CF Secrets (env.*).
+ * Aplikacje dostają 1h JWT od /auth/token.
+ * Nawet jeśli token wycieknie — wygasa zanim ktoś go użyje.
  *
- * Zasada Kairos: właściwa ścieżka, nie najszybsza.
- * Zasada Subsidiarity: najniższy poziom który poradzi sobie z zadaniem.
- * Zasada Pleroma: każdy request zostaw z lepszą odpowiedzią niż oczekiwano.
+ * Ścieżki jak zdrowy organizm (wzorzec z pliku):
+ *  REFLEX     → Ollama lokalnie     — łuk odruchowy,     €0,       <200ms
+ *  INTUITIVE  → Claude Haiku        — System 1, wzorce,  €0.00005, <1s
+ *  DELIBERATE → Claude Sonnet       — System 2, głęboki, €0.001,   2-5s
+ *  COLLECTIVE → Sonnet multi-step   — inteligencja zbior,€0.005,   5-15s
+ *
+ * Routing: koszt logarytmicznie → 0 bo cache + reflex rośnie z użyciem.
  */
 
-const PATHS = {
-  reflex:     { model: 'qwen2.5:0.5b',     maxCost: 0,       maxLatency: 500  },
-  intuitive:  { model: 'claude-haiku-4-5',  maxCost: 0.001,   maxLatency: 2000 },
-  deliberate: { model: 'claude-sonnet-4-5', maxCost: 0.01,    maxLatency: 8000 },
-  collective: { model: 'claude-sonnet-4-5', maxCost: 0.05,    maxLatency: 30000 },
-};
-
-// ── Complexity scorer ─────────────────────────────────────────────────────────
+// ── Routing intelligence ──────────────────────────────────────────────────────
 function scoreComplexity(text, urgency = 'normal') {
+  if (!text || text.length < 3) return 0;
   const words = text.trim().split(/\s+/).length;
   let score = Math.min(1.0, words / 250);
 
-  const deliberateRx = /architektur|security audit|deploy|migration|refactor|strategia|optymalizacja systemu|full analysis|explain.*deep|dlaczego.*kompletnie/i;
-  const collectiveRx = /research|zbadaj wszystko|multi.agent|swarm|pełna analiza ekosystemu|investigate entire/i;
+  // Wzorce = wyższy poziom
+  if (/architektur|security.audit|deploy|migration|refactor|strategia|pełna analiza|optymalizacja systemu/i.test(text))
+    score = Math.max(score, 0.65);
+  if (/research|zbadaj wszystko|multi.agent|swarm|investigate entire/i.test(text))
+    score = 1.0;
 
-  if (collectiveRx.test(text)) score = 1.0;
-  else if (deliberateRx.test(text)) score = Math.max(score, 0.65);
-
-  // Pilność może obniżyć ścieżkę (subsidiarity: nie przeciążaj wyżej)
-  if (urgency === 'realtime') score = Math.min(score, 0.5);
-  if (urgency === 'batch')    score = Math.max(score, 0.85);
-
+  if (urgency === 'realtime') score = Math.min(score, 0.45);  // zawsze max intuitive
+  if (urgency === 'batch')    score = Math.max(score, 0.85);  // zawsze collective
   return score;
 }
 
-function choosePath(complexity, urgency) {
-  if (complexity >= 0.85) return 'collective';
-  if (complexity >= 0.55) return 'deliberate';
-  if (complexity >= 0.20) return 'intuitive';
+function choosePath(score) {
+  if (score >= 0.85) return 'collective';
+  if (score >= 0.55) return 'deliberate';
+  if (score >= 0.20) return 'intuitive';
   return 'reflex';
 }
 
-// ── Semantic cache key ─────────────────────────────────────────────────────────
-async function makeCacheKey(text) {
-  const normalized = text.toLowerCase().trim().replace(/\s+/g, ' ').slice(0, 200);
-  const encoder = new TextEncoder();
-  const data = encoder.encode(normalized);
-  const hashBuf = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,'0')).join('').slice(0,32);
+// ── Semantic cache key (SHA-256 of normalized text) ───────────────────────────
+async function cacheKey(text) {
+  const norm = text.toLowerCase().replace(/\s+/g,' ').trim().slice(0,300);
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(norm));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,32);
 }
 
-// ── Call model ────────────────────────────────────────────────────────────────
-async function callModel(path, messages, env) {
-  const t0 = Date.now();
+// ── Auth: validate app token via Supabase RPC ────────────────────────────────
+async function validateAppToken(token, appName, env) {
+  if (!token) return null;
+  // Master secret: bypass token check for internal calls
+  if (token === env.ROUTER_SECRET) return { valid: true, app: 'admin', scope: ['read','write','admin'] };
 
-  if (path === 'reflex') {
-    // Local Ollama
-    const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
+  try {
+    const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/validate_live_token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'qwen2.5:0.5b', messages, stream: false }),
+      headers: {
+        'apikey': env.SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SUPABASE_ANON_KEY}`
+      },
+      body: JSON.stringify({ p_token: token, p_app_name: appName || 'unknown' }),
       signal: AbortSignal.timeout(3000)
     });
-    const d = await r.json();
-    return {
-      text: d.message?.content || '',
-      latency: Date.now() - t0,
-      cost: 0,
-      model: 'qwen2.5:0.5b'
-    };
+    return await r.json();
+  } catch { return null; }
+}
+
+// ── Issue new live token ──────────────────────────────────────────────────────
+async function issueToken(appName, scope, env) {
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/issue_live_token`, {
+    method: 'POST',
+    headers: {
+      'apikey': env.SUPABASE_SERVICE_KEY,
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}`
+    },
+    body: JSON.stringify({ p_app_name: appName, p_scope: scope || ['read','write'] }),
+    signal: AbortSignal.timeout(5000)
+  });
+  return r.json();
+}
+
+// ── Call LLM model ────────────────────────────────────────────────────────────
+const MODEL_IDS = {
+  'claude-haiku-4-5':  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-5': 'claude-sonnet-4-5-20251001',
+};
+const PRICE = {
+  intuitive:  { in: 0.00000025, out: 0.00000125 },
+  deliberate: { in: 0.000003,   out: 0.000015   },
+  collective: { in: 0.000003,   out: 0.000015   },
+};
+
+async function callLLM(path, messages, env) {
+  const t0 = Date.now();
+
+  // REFLEX: lokalne Ollama — zero kosztu
+  if (path === 'reflex') {
+    try {
+      const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'qwen2.5:0.5b', messages, stream: false }),
+        signal: AbortSignal.timeout(4000)
+      });
+      const d = await r.json();
+      return { text: d.message?.content || '', latency: Date.now()-t0, cost: 0, model: 'qwen2.5:0.5b' };
+    } catch {
+      // Reflex fallback → intuitive
+      path = 'intuitive';
+    }
   }
 
-  // Anthropic (haiku or sonnet)
-  const model = PATHS[path].model === 'claude-haiku-4-5'
-    ? 'claude-haiku-4-5-20251001'
-    : 'claude-sonnet-4-5-20251001';
+  // COLLECTIVE: dodatkowy system prompt + wyższe max_tokens
+  const isCollective = path === 'collective';
+  const modelId = isCollective || path === 'deliberate'
+    ? MODEL_IDS['claude-sonnet-4-5']
+    : MODEL_IDS['claude-haiku-4-5'];
+
+  const sysMsg = isCollective
+    ? 'Jesteś inteligencją zbiorową ekosystemu Holon (ofshore.dev). Analizuj wielowymiarowo. Subsidiarity: zacznij od najprostszego. Pleroma: zostaw odpowiedź lepszą niż oczekiwano.'
+    : 'Jesteś agentem Holonu. Odpowiadaj precyzyjnie i zwięźle.';
 
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
+      'x-api-key': env.ANTHROPIC_API_KEY,  // CF Secret — nigdy widoczny w kodzie/git
       'anthropic-version': '2023-06-01'
     },
-    body: JSON.stringify({ model, max_tokens: 1024, messages }),
-    signal: AbortSignal.timeout(PATHS[path].maxLatency + 5000)
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: isCollective ? 4096 : path === 'deliberate' ? 2048 : 1024,
+      system: sysMsg,
+      messages
+    }),
+    signal: AbortSignal.timeout(30000)
   });
 
   const d = await r.json();
-  const inputT  = d.usage?.input_tokens  || 0;
-  const outputT = d.usage?.output_tokens || 0;
-  const priceIn  = path === 'intuitive' ? 0.00000025 : 0.000003;
-  const priceOut = path === 'intuitive' ? 0.00000125 : 0.000015;
+  if (d.error) throw new Error(d.error.message);
 
+  const iT = d.usage?.input_tokens || 0, oT = d.usage?.output_tokens || 0;
+  const p = PRICE[path] || PRICE.intuitive;
   return {
-    text: d.content?.[0]?.text || d.error?.message || 'Error',
-    latency: Date.now() - t0,
-    cost: inputT * priceIn + outputT * priceOut,
-    model,
-    tokens: { input: inputT, output: outputT }
+    text: d.content?.[0]?.text || '',
+    latency: Date.now()-t0,
+    cost: iT*p.in + oT*p.out,
+    model: modelId,
+    tokens: { input: iT, output: oT }
   };
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+// ── CORS headers ──────────────────────────────────────────────────────────────
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type,x-app-token,x-app-name,x-router-key,x-urgency',
+};
+const json = (data, status=200) => Response.json(data, { status, headers: CORS });
+
+// ── Main fetch handler ────────────────────────────────────────────────────────
 export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
-    // CORS
-    const cors = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type,x-router-key,x-urgency,x-source-app',
-    };
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
+    // ── /health ──────────────────────────────────────────────────────────────
+    if (url.pathname === '/health')
+      return json({ status:'ok', service:'brain-router-v2', ts: new Date().toISOString(),
+        architecture: 'zero-exposure', paths: ['reflex','intuitive','deliberate','collective'] });
 
-    // Health
-    if (url.pathname === '/health') {
-      return Response.json({ status:'ok', service:'brain-router', ts: new Date().toISOString() }, { headers: cors });
+    // ── /auth/token — aplikacja dostaje 1h JWT ────────────────────────────────
+    if (url.pathname === '/auth/token' && req.method === 'POST') {
+      const masterKey = req.headers.get('x-router-key');
+      if (masterKey !== env.ROUTER_SECRET) return json({ error:'unauthorized' }, 401);
+      const body = await req.json().catch(() => ({}));
+      const tokenData = await issueToken(body.app_name || 'unknown', body.scope, env);
+      return json(tokenData);
     }
 
-    // Stats
-    if (url.pathname === '/stats' && request.method === 'GET') {
-      const rows = await env.KB_META.prepare('SELECT * FROM routing_stats').all();
-      return Response.json({ paths: rows.results }, { headers: cors });
+    // ── /auth/rotate — wymuś natychmiastową rotację tokena ────────────────────
+    if (url.pathname === '/auth/rotate' && req.method === 'POST') {
+      const masterKey = req.headers.get('x-router-key');
+      if (masterKey !== env.ROUTER_SECRET) return json({ error:'unauthorized' }, 401);
+      const body = await req.json().catch(() => ({}));
+
+      // Wywołaj rotację przez Supabase RPC
+      const r = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/rotate_coolify_token`, {
+        method: 'POST',
+        headers: { 'apikey': env.SUPABASE_SERVICE_KEY, 'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}` },
+        body: '{}'
+      });
+      const result = await r.json();
+      return json({ rotated: true, result });
     }
 
-    // Security report endpoint
-    if (url.pathname === '/security/report' && request.method === 'POST') {
-      const apiKey = request.headers.get('x-router-key');
-      if (apiKey !== env.ROUTER_SECRET) return new Response('Unauthorized', { status:401, headers: cors });
-      const body = await request.json();
+    // ── /security/exposure — raport o wycieku (auto-trigger rotacji) ──────────
+    if (url.pathname === '/security/exposure' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({}));
       // Log to D1
       await env.KB_META.prepare(
-        'INSERT INTO security_log (id, event_type, token_name, severity, details) VALUES (?,?,?,?,?)'
-      ).bind(crypto.randomUUID(), body.event_type || 'exposure', body.token, body.severity || 'high', JSON.stringify(body)).run();
-      // Forward to Supabase RPC (fire-and-forget)
+        'INSERT INTO security_log(id,event_type,token_name,severity,details) VALUES(?,?,?,?,?)'
+      ).bind(crypto.randomUUID(),'exposure',body.token||'unknown','critical',JSON.stringify(body)).run();
+      // Forward to Supabase (fire & forget)
       fetch(`${env.SUPABASE_URL}/rest/v1/rpc/report_token_exposure`, {
-        method: 'POST',
-        headers: { 'apikey': env.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ p_token_name: body.token, p_source: 'brain-router', p_details: body.details })
-      }).catch(() => {});
-      return Response.json({ reported: true }, { headers: cors });
+        method:'POST',
+        headers:{'apikey':env.SUPABASE_ANON_KEY,'Content-Type':'application/json',
+          'Authorization':`Bearer ${env.SUPABASE_ANON_KEY}`},
+        body:JSON.stringify({p_token_name:body.token,p_source:'brain-router',p_details:body.details})
+      }).catch(()=>{});
+      return json({ reported: true, action: 'rotation_queued' });
     }
 
-    // Main: POST /chat or /route
-    if ((url.pathname === '/chat' || url.pathname === '/route') && request.method === 'POST') {
-      const apiKey = request.headers.get('x-router-key');
-      if (apiKey !== env.ROUTER_SECRET && !env.ROUTER_PUBLIC) {
-        return new Response('Unauthorized', { status: 401, headers: cors });
-      }
+    // ── /chat — główny endpoint routujący requesty ────────────────────────────
+    if (url.pathname === '/chat' && req.method === 'POST') {
+      const appToken = req.headers.get('x-app-token');
+      const appName  = req.headers.get('x-app-name') || 'unknown';
+      const urgency  = req.headers.get('x-urgency') || 'normal';
 
-      let body;
-      try { body = await request.json(); }
-      catch { return new Response('Invalid JSON', { status: 400, headers: cors }); }
+      // Waliduj token
+      const auth = await validateAppToken(appToken, appName, env);
+      if (!auth?.valid) return json({ error:'invalid_or_expired_token',
+        hint:'Call POST /auth/token with x-router-key to get a fresh 1h token' }, 401);
 
-      const { messages, prompt, urgency = 'normal', source_app = 'unknown', force_path } = body;
-      const userMsg = prompt || (messages?.find(m => m.role === 'user')?.content) || '';
+      const body = await req.json().catch(() => null);
+      if (!body) return json({ error:'invalid_json' }, 400);
 
-      if (!userMsg) return Response.json({ error: 'No message provided' }, { status: 400, headers: cors });
+      const userText = body.prompt || body.messages?.find(m=>m.role==='user')?.content || '';
+      if (!userText) return json({ error:'no_message' }, 400);
 
-      // Semantic cache check
-      const cacheKey = await makeCacheKey(userMsg);
+      // Semantic cache (skip for realtime)
+      const ck = await cacheKey(userText);
       if (urgency !== 'realtime') {
-        const cached = await env.KB_META.prepare(
-          'SELECT * FROM routing_cache WHERE key=? AND (expires_at IS NULL OR expires_at > datetime("now"))'
-        ).bind(cacheKey).first();
-        if (cached) {
-          await env.KB_META.prepare('UPDATE routing_cache SET hit_count=hit_count+1 WHERE key=?').bind(cacheKey).run();
-          return Response.json({
-            text: cached.response, path: cached.path, model: cached.model,
-            cached: true, complexity: cached.complexity
-          }, { headers: cors });
+        const hit = await env.KB_META.prepare(
+          'SELECT * FROM routing_cache WHERE key=? AND (expires_at IS NULL OR expires_at>datetime("now")) LIMIT 1'
+        ).bind(ck).first();
+        if (hit) {
+          await env.KB_META.prepare('UPDATE routing_cache SET hit_count=hit_count+1 WHERE key=?').bind(ck).run();
+          return json({ text:hit.response, path:hit.path, model:hit.model,
+            cached:true, complexity:hit.complexity });
         }
       }
 
-      // Choose path
-      const complexity = scoreComplexity(userMsg, urgency);
-      const path = force_path || choosePath(complexity, urgency);
-      const msgs = messages || [{ role: 'user', content: userMsg }];
+      const complexity = scoreComplexity(userText, urgency);
+      const path = body.force_path || choosePath(complexity);
+      const messages = body.messages || [{ role:'user', content: userText }];
 
-      // Call model
       let result;
       try {
-        result = await callModel(path, msgs, env);
-      } catch (e) {
-        // Fallback: escalate to next path
-        const fallbackPath = path === 'reflex' ? 'intuitive' : 'deliberate';
-        try {
-          result = await callModel(fallbackPath, msgs, env);
-          result.fallback_from = path;
-        } catch (e2) {
-          return Response.json({ error: e2.message, path }, { status: 500, headers: cors });
-        }
+        result = await callLLM(path, messages, env);
+      } catch(e) {
+        // Fallback path
+        const fallback = path==='reflex'?'intuitive' : path==='intuitive'?'deliberate':'deliberate';
+        result = await callLLM(fallback, messages, env);
+        result.fallback_from = path;
       }
 
-      // Cache for non-realtime, non-collective
-      if (urgency !== 'realtime' && path !== 'collective') {
-        const ttlHours = path === 'reflex' ? 24 : path === 'intuitive' ? 6 : 1;
+      // Cache (TTL: reflex=24h, intuitive=6h, deliberate=1h, collective=skip)
+      if (path !== 'collective' && urgency !== 'realtime') {
+        const ttl = path==='reflex'?24 : path==='intuitive'?6 : 1;
         await env.KB_META.prepare(
-          'INSERT OR REPLACE INTO routing_cache (key,path,model,complexity,response,expires_at) VALUES (?,?,?,?,?,datetime("now","+"||?||" hours"))'
-        ).bind(cacheKey, path, result.model, complexity, result.text, ttlHours).run();
+          'INSERT OR REPLACE INTO routing_cache(key,path,model,complexity,response,hit_count,created_at,expires_at)'
+          +' VALUES(?,?,?,?,?,1,datetime("now"),datetime("now","+'+ ttl +' hours"))'
+        ).bind(ck, path, result.model, complexity, result.text).run();
       }
 
       // Update stats
       await env.KB_META.prepare(
-        'UPDATE routing_stats SET total_requests=total_requests+1, avg_latency_ms=(avg_latency_ms*0.85+?*0.15), total_cost_usd=total_cost_usd+?, last_used=datetime("now") WHERE path=?'
-      ).bind(result.latency, result.cost || 0, path).run();
+        'UPDATE routing_stats SET total_requests=total_requests+1,'
+        +'avg_latency_ms=avg_latency_ms*0.85+?*0.15,'
+        +'total_cost_usd=total_cost_usd+?,last_used=datetime("now") WHERE path=?'
+      ).bind(result.latency, result.cost||0, path).run();
 
-      return Response.json({
-        text: result.text,
-        path,
-        model: result.model,
-        complexity: Math.round(complexity * 1000) / 1000,
-        latency_ms: result.latency,
-        cost_usd: result.cost,
-        cached: false,
+      return json({
+        text: result.text, path, model: result.model,
+        complexity: Math.round(complexity*1000)/1000,
+        latency_ms: result.latency, cost_usd: result.cost,
+        cached: false, app: appName,
         reasoning: {
-          reflex:     'Łuk odruchowy — lokalnie, zero kosztu',
-          intuitive:  'System 1 — szybkie wzorce',
-          deliberate: 'System 2 — głębokie rozumowanie',
-          collective: 'Inteligencja zbiorowa — multi-step'
-        }[path]
-      }, { headers: cors });
+          reflex:     'Łuk odruchowy — Ollama €0 <200ms',
+          intuitive:  'System 1 — Haiku wzorce <1s',
+          deliberate: 'System 2 — Sonnet głęboki 2-5s',
+          collective: 'Inteligencja zbiorowa 5-15s',
+        }[path],
+        security: 'zero-exposure — token valid 1h, rotated automatically'
+      });
     }
 
-    return new Response('Not Found', { status: 404, headers: cors });
+    // ── /stats ────────────────────────────────────────────────────────────────
+    if (url.pathname === '/stats') {
+      const stats = await env.KB_META.prepare('SELECT * FROM routing_stats').all();
+      const cache = await env.KB_META.prepare('SELECT COUNT(*) as entries, SUM(hit_count) as hits FROM routing_cache').first();
+      return json({ paths: stats.results, cache, ts: new Date().toISOString() });
+    }
+
+    return json({ error:'not_found', available:['/health','/auth/token','/chat','/stats'] }, 404);
   }
 };
