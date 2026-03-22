@@ -11,13 +11,10 @@ database_id = "1f507f5c-11ec-4786-a906-6737554c0fbc"
 [vars]
 ROUTER_PUBLIC = "false"
 
-# Secrets (set via wrangler secret put):
-# ANTHROPIC_API_KEY
-# ROUTER_SECRET
-# SUPABASE_URL
-# SUPABASE_ANON_KEY
-# OLLAMA_URL
-
-[[routes]]
-pattern = "brain-router.ofshore.dev/*"
-zone_name = "ofshore.dev"
+# CF Secrets (nigdy w git, nigdy w logach):
+# wrangler secret put ANTHROPIC_API_KEY
+# wrangler secret put ROUTER_SECRET
+# wrangler secret put SUPABASE_URL
+# wrangler secret put SUPABASE_ANON_KEY
+# wrangler secret put SUPABASE_SERVICE_KEY
+# wrangler secret put OLLAMA_URL
