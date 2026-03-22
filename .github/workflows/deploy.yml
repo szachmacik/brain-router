@@ -1,0 +1,28 @@
+name: Deploy Brain Router to Cloudflare
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy Worker
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          secrets: |
+            ANTHROPIC_API_KEY
+            ROUTER_SECRET
+            SUPABASE_URL
+            SUPABASE_ANON_KEY
+            OLLAMA_URL
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ROUTER_SECRET: ${{ secrets.ROUTER_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OLLAMA_URL: ${{ secrets.OLLAMA_URL }}
