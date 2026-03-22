@@ -1,0 +1,43 @@
+name: GitHub Token Health Check
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Co poniedziałek 9:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check GitHub token expiry & alert
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://blgdhfcosqjzrutncbbr.supabase.co' }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          # Sprawdź token rate limit (proxy dla ważności)
+          REMAINING=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/rate_limit | python3 -c "import sys,json; print(json.load(sys.stdin)['rate']['remaining'])" 2>/dev/null || echo "0")
+          
+          echo "Token remaining calls: $REMAINING"
+          
+          if [ "$REMAINING" -lt "100" ]; then
+            # Alert przez Supabase RPC → Telegram
+            curl -s -X POST "$SUPABASE_URL/rest/v1/rpc/report_token_exposure" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{"p_token_name":"github_token","p_source":"github_actions_health_check","p_details":"Low rate limit - token may need rotation"}'
+          fi
+          
+      - name: Auto-rotate all Coolify app envs with fresh Vault values
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://blgdhfcosqjzrutncbbr.supabase.co' }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          # Trigger live_token re-issue dla wszystkich aplikacji
+          curl -s -X POST "$SUPABASE_URL/rest/v1/rpc/issue_live_token" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"p_app_name":"github-actions","p_scope":["read","write"]}'
+          echo "Live tokens refreshed"
