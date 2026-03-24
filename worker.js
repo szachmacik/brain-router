@@ -82,75 +82,144 @@ async function issueToken(appName, scope, env) {
   return r.json();
 }
 
-// ── Call LLM model ────────────────────────────────────────────────────────────
+// ── Multi-Provider LLM Engine ────────────────────────────────────────────────
+// Provider priority per path (auto-failover na rate limit):
+//   reflex:     Ollama → Gemini Flash (free)
+//   intuitive:  Haiku  → Gemini Flash → GPT-4o-mini
+//   deliberate: Sonnet → GPT-4o       → Gemini Pro
+//   collective: Sonnet → GPT-4o       → Gemini Pro
+
 const MODEL_IDS = {
-  'claude-haiku-4-5':  'claude-haiku-4-5-20251001',
-  'claude-sonnet-4-5': 'claude-sonnet-4-5-20251001',
+  'claude-haiku':   'claude-haiku-4-5-20251001',
+  'claude-sonnet':  'claude-sonnet-4-6',
+  'gemini-flash':   'gemini-2.0-flash',
+  'gemini-pro':     'gemini-1.5-pro',
+  'gpt-4o-mini':    'gpt-4o-mini',
+  'gpt-4o':         'gpt-4o',
 };
+
 const PRICE = {
-  intuitive:  { in: 0.00000025, out: 0.00000125 },
-  deliberate: { in: 0.000003,   out: 0.000015   },
-  collective: { in: 0.000003,   out: 0.000015   },
+  // per token USD
+  'claude-haiku':  { in: 0.00000025, out: 0.00000125 },
+  'claude-sonnet': { in: 0.000003,   out: 0.000015   },
+  'gemini-flash':  { in: 0.0000001,  out: 0.0000004  },  // praktycznie free
+  'gemini-pro':    { in: 0.0000035,  out: 0.0000105  },
+  'gpt-4o-mini':   { in: 0.00000015, out: 0.0000006  },
+  'gpt-4o':        { in: 0.000005,   out: 0.000015   },
 };
 
-async function callLLM(path, messages, env) {
-  const t0 = Date.now();
+const PATH_PROVIDERS = {
+  reflex:     ['ollama', 'gemini-flash'],
+  intuitive:  ['claude-haiku', 'gemini-flash', 'gpt-4o-mini'],
+  deliberate: ['claude-sonnet', 'gpt-4o', 'gemini-pro'],
+  collective: ['claude-sonnet', 'gpt-4o', 'gemini-pro'],
+};
 
-  // REFLEX: lokalne Ollama — zero kosztu
-  if (path === 'reflex') {
-    try {
-      const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'qwen2.5:0.5b', messages, stream: false }),
-        signal: AbortSignal.timeout(4000)
-      });
-      const d = await r.json();
-      return { text: d.message?.content || '', latency: Date.now()-t0, cost: 0, model: 'qwen2.5:0.5b' };
-    } catch {
-      // Reflex fallback → intuitive
-      path = 'intuitive';
-    }
-  }
+const HOLON_SYSTEM = 'Jesteś agentem Holonu (ofshore.dev). Odpowiadaj precyzyjnie i zwięźle.';
+const COLLECTIVE_SYSTEM = 'Jesteś inteligencją zbiorową ekosystemu Holon (ofshore.dev). Analizuj wielowymiarowo. Subsidiarity: zacznij od najprostszego. Pleroma: zostaw odpowiedź lepszą niż oczekiwano.';
 
-  // COLLECTIVE: dodatkowy system prompt + wyższe max_tokens
+// ── Per-provider callers ──────────────────────────────────────────────────────
+
+async function callOllama(messages, env, t0) {
+  const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'qwen2.5:0.5b', messages, stream: false }),
+    signal: AbortSignal.timeout(4000),
+  });
+  const d = await r.json();
+  return { text: d.message?.content || '', latency: Date.now()-t0, cost: 0, model: 'qwen2.5:0.5b' };
+}
+
+async function callClaude(model, messages, path, env, t0) {
   const isCollective = path === 'collective';
-  const modelId = isCollective || path === 'deliberate'
-    ? MODEL_IDS['claude-sonnet-4-5']
-    : MODEL_IDS['claude-haiku-4-5'];
-
-  const sysMsg = isCollective
-    ? 'Jesteś inteligencją zbiorową ekosystemu Holon (ofshore.dev). Analizuj wielowymiarowo. Subsidiarity: zacznij od najprostszego. Pleroma: zostaw odpowiedź lepszą niż oczekiwano.'
-    : 'Jesteś agentem Holonu. Odpowiadaj precyzyjnie i zwięźle.';
-
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,  // CF Secret — nigdy widoczny w kodzie/git
-      'anthropic-version': '2023-06-01'
-    },
+    headers: { 'Content-Type':'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' },
     body: JSON.stringify({
-      model: modelId,
+      model: MODEL_IDS[model],
       max_tokens: isCollective ? 4096 : path === 'deliberate' ? 2048 : 1024,
-      system: sysMsg,
-      messages
+      system: isCollective ? COLLECTIVE_SYSTEM : HOLON_SYSTEM,
+      messages,
     }),
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(30000),
   });
-
   const d = await r.json();
-  if (d.error) throw new Error(d.error.message);
+  if (d.error) throw new Error(`Claude ${d.error.type}: ${d.error.message}`);
+  const iT = d.usage?.input_tokens||0, oT = d.usage?.output_tokens||0;
+  const p = PRICE[model];
+  return { text: d.content?.[0]?.text||'', latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+}
 
-  const iT = d.usage?.input_tokens || 0, oT = d.usage?.output_tokens || 0;
-  const p = PRICE[path] || PRICE.intuitive;
-  return {
-    text: d.content?.[0]?.text || '',
-    latency: Date.now()-t0,
-    cost: iT*p.in + oT*p.out,
-    model: modelId,
-    tokens: { input: iT, output: oT }
+async function callGemini(model, messages, path, env, t0) {
+  if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not set');
+  // Convert messages to Gemini format
+  const contents = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const systemMsg = messages.find(m => m.role === 'system');
+  const body = {
+    contents,
+    ...(systemMsg ? { systemInstruction: { parts: [{ text: systemMsg.content }] } } : {}),
+    generationConfig: { maxOutputTokens: path === 'collective' ? 4096 : path === 'deliberate' ? 2048 : 1024 },
   };
+  const r = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_IDS[model]}:generateContent?key=${env.GEMINI_API_KEY}`,
+    { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(25000) }
+  );
+  const d = await r.json();
+  if (d.error) throw new Error(`Gemini: ${d.error.message}`);
+  const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const iT = d.usageMetadata?.promptTokenCount||0, oT = d.usageMetadata?.candidatesTokenCount||0;
+  const p = PRICE[model];
+  return { text, latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+}
+
+async function callOpenAI(model, messages, path, env, t0) {
+  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${env.OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: MODEL_IDS[model],
+      messages: [{ role:'system', content: path === 'collective' ? COLLECTIVE_SYSTEM : HOLON_SYSTEM }, ...messages],
+      max_tokens: path === 'collective' ? 4096 : path === 'deliberate' ? 2048 : 1024,
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(`OpenAI: ${d.error.message}`);
+  const iT = d.usage?.prompt_tokens||0, oT = d.usage?.completion_tokens||0;
+  const p = PRICE[model];
+  return { text: d.choices?.[0]?.message?.content||'', latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+}
+
+// ── Main callLLM with auto-failover ──────────────────────────────────────────
+async function callLLM(path, messages, env, preferProvider = null) {
+  const t0 = Date.now();
+  const providers = preferProvider
+    ? [preferProvider, ...PATH_PROVIDERS[path].filter(p => p !== preferProvider)]
+    : PATH_PROVIDERS[path];
+
+  let lastError;
+  for (const provider of providers) {
+    try {
+      if (provider === 'ollama')       return await callOllama(messages, env, t0);
+      if (provider === 'claude-haiku') return await callClaude('claude-haiku', messages, path, env, t0);
+      if (provider === 'claude-sonnet')return await callClaude('claude-sonnet', messages, path, env, t0);
+      if (provider === 'gemini-flash') return await callGemini('gemini-flash', messages, path, env, t0);
+      if (provider === 'gemini-pro')   return await callGemini('gemini-pro', messages, path, env, t0);
+      if (provider === 'gpt-4o-mini')  return await callOpenAI('gpt-4o-mini', messages, path, env, t0);
+      if (provider === 'gpt-4o')       return await callOpenAI('gpt-4o', messages, path, env, t0);
+    } catch(e) {
+      lastError = e;
+      const isRateLimit = e.message?.includes('rate') || e.message?.includes('529') || e.message?.includes('quota');
+      console.log(`[brain-router] ${provider} failed (${e.message?.slice(0,60)}), trying next...`);
+      if (!isRateLimit) break;  // nie-rate-limit błąd → nie próbuj dalej
+      continue;  // rate limit → następny provider
+    }
+  }
+  throw lastError || new Error('All providers exhausted');
 }
 
 // ── CORS headers ──────────────────────────────────────────────────────────────
@@ -230,6 +299,8 @@ export default {
       if (!body) return json({ error:'invalid_json' }, 400);
 
       const userText = body.prompt || body.messages?.find(m=>m.role==='user')?.content || '';
+      const userId   = body.user_id || appName;           // track per user
+      const preferProvider = body.prefer_provider || null; // e.g. 'gemini-flash' for Kamila speed
       if (!userText) return json({ error:'no_message' }, 400);
 
       // Semantic cache (skip for realtime)
@@ -251,11 +322,12 @@ export default {
 
       let result;
       try {
-        result = await callLLM(path, messages, env);
+        result = await callLLM(path, messages, env, preferProvider);
+        result.user_id = userId;
       } catch(e) {
         // Fallback path
         const fallback = path==='reflex'?'intuitive' : path==='intuitive'?'deliberate':'deliberate';
-        result = await callLLM(fallback, messages, env);
+        result = await callLLM(fallback, messages, env, null);
         result.fallback_from = path;
       }
 
