@@ -82,12 +82,13 @@ async function issueToken(appName, scope, env) {
   return r.json();
 }
 
-// ── Multi-Provider LLM Engine ────────────────────────────────────────────────
-// Provider priority per path (auto-failover na rate limit):
-//   reflex:     Ollama → Gemini Flash (free)
-//   intuitive:  Haiku  → Gemini Flash → GPT-4o-mini
-//   deliberate: Sonnet → GPT-4o       → Gemini Pro
-//   collective: Sonnet → GPT-4o       → Gemini Pro
+// ── Multi-Provider LLM Engine v4 ─────────────────────────────────────────────
+// Provider priority (cost-optimised with auto-failover):
+//   reflex:     Ollama(€0) → Groq-8b(€0 free) → Gemini-flash
+//   intuitive:  Groq-70b(€0 FREE) → Haiku → Gemini-flash
+//   deliberate: DeepSeek($0.001) → Sonnet → GPT-4o
+//   collective: Sonnet → GPT-4o → Gemini-pro
+// CF Worker executes at edge — bypasses Bot Fight Mode automatically
 
 const MODEL_IDS = {
   'claude-haiku':   'claude-haiku-4-5-20251001',
@@ -96,102 +97,157 @@ const MODEL_IDS = {
   'gemini-pro':     'gemini-1.5-pro',
   'gpt-4o-mini':    'gpt-4o-mini',
   'gpt-4o':         'gpt-4o',
+  'groq-70b':       'llama-3.3-70b-versatile',
+  'groq-8b':        'llama-3.1-8b-instant',
+  'deepseek':       'deepseek-chat',
 };
 
 const PRICE = {
-  // per token USD
   'claude-haiku':  { in: 0.00000025, out: 0.00000125 },
   'claude-sonnet': { in: 0.000003,   out: 0.000015   },
-  'gemini-flash':  { in: 0.0000001,  out: 0.0000004  },  // praktycznie free
+  'gemini-flash':  { in: 0.0000001,  out: 0.0000004  },
   'gemini-pro':    { in: 0.0000035,  out: 0.0000105  },
   'gpt-4o-mini':   { in: 0.00000015, out: 0.0000006  },
   'gpt-4o':        { in: 0.000005,   out: 0.000015   },
+  'groq-70b':      { in: 0,          out: 0           },
+  'groq-8b':       { in: 0,          out: 0           },
+  'deepseek':      { in: 0.0000005,  out: 0.0000015  },
 };
 
 const PATH_PROVIDERS = {
-  reflex:     ['ollama', 'gemini-flash'],
-  intuitive:  ['claude-haiku', 'gemini-flash', 'gpt-4o-mini'],
-  deliberate: ['claude-sonnet', 'gpt-4o', 'gemini-pro'],
+  reflex:     ['ollama', 'groq-8b',  'gemini-flash'],
+  intuitive:  ['groq-70b', 'claude-haiku', 'gemini-flash'],
+  deliberate: ['deepseek', 'claude-sonnet', 'gpt-4o'],
   collective: ['claude-sonnet', 'gpt-4o', 'gemini-pro'],
 };
 
-const HOLON_SYSTEM = 'Jesteś agentem Holonu (ofshore.dev). Odpowiadaj precyzyjnie i zwięźle.';
-const COLLECTIVE_SYSTEM = 'Jesteś inteligencją zbiorową ekosystemu Holon (ofshore.dev). Analizuj wielowymiarowo. Subsidiarity: zacznij od najprostszego. Pleroma: zostaw odpowiedź lepszą niż oczekiwano.';
+const HOLON  = 'Jesteś agentem Holonu (ofshore.dev). Odpowiadaj precyzyjnie i zwięźle.';
+const COLSYS = 'Jesteś inteligencją zbiorową Holonu. Analizuj wielowymiarowo. Subsidiarity: zacznij od najprostszego. Pleroma: zostaw odpowiedź lepszą niż oczekiwano.';
+
+// ── Upstash Redis cache (fast distributed) ────────────────────────────────────
+async function upstashGet(key, env) {
+  if (!env.UPSTASH_URL || !env.UPSTASH_TOKEN) return null;
+  try {
+    const r = await fetch(`${env.UPSTASH_URL}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
+      signal: AbortSignal.timeout(800),
+    });
+    const d = await r.json();
+    return d.result ? JSON.parse(d.result) : null;
+  } catch { return null; }
+}
+async function upstashSet(key, data, ttlSec, env) {
+  if (!env.UPSTASH_URL || !env.UPSTASH_TOKEN) return;
+  try {
+    await fetch(`${env.UPSTASH_URL}/set/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: JSON.stringify(data), ex: ttlSec }),
+      signal: AbortSignal.timeout(800),
+    });
+  } catch {}
+}
 
 // ── Per-provider callers ──────────────────────────────────────────────────────
-
 async function callOllama(messages, env, t0) {
   const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'qwen2.5:0.5b', messages, stream: false }),
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ model:'qwen2.5:0.5b', messages, stream:false }),
     signal: AbortSignal.timeout(4000),
   });
   const d = await r.json();
-  return { text: d.message?.content || '', latency: Date.now()-t0, cost: 0, model: 'qwen2.5:0.5b' };
+  return { text: d.message?.content||'', latency: Date.now()-t0, cost: 0, model: 'qwen2.5:0.5b' };
 }
 
 async function callClaude(model, messages, path, env, t0) {
   const isCollective = path === 'collective';
   const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' },
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'},
     body: JSON.stringify({
       model: MODEL_IDS[model],
       max_tokens: isCollective ? 4096 : path === 'deliberate' ? 2048 : 1024,
-      system: isCollective ? COLLECTIVE_SYSTEM : HOLON_SYSTEM,
-      messages,
+      system: isCollective ? COLSYS : HOLON, messages,
     }),
     signal: AbortSignal.timeout(30000),
   });
   const d = await r.json();
   if (d.error) throw new Error(`Claude ${d.error.type}: ${d.error.message}`);
-  const iT = d.usage?.input_tokens||0, oT = d.usage?.output_tokens||0;
-  const p = PRICE[model];
-  return { text: d.content?.[0]?.text||'', latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+  const iT=d.usage?.input_tokens||0, oT=d.usage?.output_tokens||0, p=PRICE[model];
+  return { text:d.content?.[0]?.text||'', latency:Date.now()-t0, cost:iT*p.in+oT*p.out, model:MODEL_IDS[model], tokens:{input:iT,output:oT} };
+}
+
+async function callGroq(model, messages, path, env, t0) {
+  if (!env.GROQ_API_KEY) throw new Error('No GROQ_API_KEY');
+  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${env.GROQ_API_KEY}`},
+    body: JSON.stringify({
+      model: MODEL_IDS[model],
+      messages: [{role:'system',content:HOLON}, ...messages],
+      max_tokens: path==='deliberate' ? 2048 : 1024,
+      temperature: 0.3,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(`Groq: ${d.error.message}`);
+  return { text:d.choices?.[0]?.message?.content||'', latency:Date.now()-t0, cost:0, model:MODEL_IDS[model] };
+}
+
+async function callDeepSeek(messages, path, env, t0) {
+  if (!env.DEEPSEEK_API_KEY) throw new Error('No DEEPSEEK_API_KEY');
+  const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${env.DEEPSEEK_API_KEY}`},
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{role:'system',content:HOLON}, ...messages],
+      max_tokens: path==='deliberate' ? 2048 : 1024,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(`DeepSeek: ${d.error.message}`);
+  const iT=d.usage?.prompt_tokens||0, oT=d.usage?.completion_tokens||0, p=PRICE['deepseek'];
+  return { text:d.choices?.[0]?.message?.content||'', latency:Date.now()-t0, cost:iT*p.in+oT*p.out, model:'deepseek-chat' };
 }
 
 async function callGemini(model, messages, path, env, t0) {
-  if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not set');
-  // Convert messages to Gemini format
-  const contents = messages
-    .filter(m => m.role !== 'system')
-    .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
-  const systemMsg = messages.find(m => m.role === 'system');
-  const body = {
-    contents,
-    ...(systemMsg ? { systemInstruction: { parts: [{ text: systemMsg.content }] } } : {}),
-    generationConfig: { maxOutputTokens: path === 'collective' ? 4096 : path === 'deliberate' ? 2048 : 1024 },
-  };
+  if (!env.GEMINI_API_KEY) throw new Error('No GEMINI_API_KEY');
+  const contents = messages.filter(m=>m.role!=='system')
+    .map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
   const r = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_IDS[model]}:generateContent?key=${env.GEMINI_API_KEY}`,
-    { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(25000) }
+    { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents,generationConfig:{maxOutputTokens:path==='collective'?4096:1024}}),
+      signal:AbortSignal.timeout(25000) }
   );
   const d = await r.json();
   if (d.error) throw new Error(`Gemini: ${d.error.message}`);
-  const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const iT = d.usageMetadata?.promptTokenCount||0, oT = d.usageMetadata?.candidatesTokenCount||0;
-  const p = PRICE[model];
-  return { text, latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+  const text=d.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  const iT=d.usageMetadata?.promptTokenCount||0, oT=d.usageMetadata?.candidatesTokenCount||0, p=PRICE[model];
+  return { text, latency:Date.now()-t0, cost:iT*p.in+oT*p.out, model:MODEL_IDS[model] };
 }
 
 async function callOpenAI(model, messages, path, env, t0) {
-  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
-  const r = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${env.OPENAI_API_KEY}` },
-    body: JSON.stringify({
-      model: MODEL_IDS[model],
-      messages: [{ role:'system', content: path === 'collective' ? COLLECTIVE_SYSTEM : HOLON_SYSTEM }, ...messages],
-      max_tokens: path === 'collective' ? 4096 : path === 'deliberate' ? 2048 : 1024,
+  const auth = env.OPENAI_API_KEY || env.OPENROUTER_API_KEY;
+  const url  = env.OPENAI_API_KEY ? 'https://api.openai.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+  if (!auth) throw new Error('No OpenAI/OpenRouter key');
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${auth}`,'HTTP-Referer':'https://ofshore.dev'},
+    body:JSON.stringify({
+      model:MODEL_IDS[model],
+      messages:[{role:'system',content:path==='collective'?COLSYS:HOLON},...messages],
+      max_tokens:path==='collective'?4096:path==='deliberate'?2048:1024,
     }),
-    signal: AbortSignal.timeout(30000),
+    signal:AbortSignal.timeout(30000),
   });
   const d = await r.json();
   if (d.error) throw new Error(`OpenAI: ${d.error.message}`);
-  const iT = d.usage?.prompt_tokens||0, oT = d.usage?.completion_tokens||0;
-  const p = PRICE[model];
-  return { text: d.choices?.[0]?.message?.content||'', latency: Date.now()-t0, cost: iT*p.in+oT*p.out, model: MODEL_IDS[model], tokens:{input:iT,output:oT} };
+  const iT=d.usage?.prompt_tokens||0, oT=d.usage?.completion_tokens||0, p=PRICE[model]||PRICE['gpt-4o'];
+  return { text:d.choices?.[0]?.message?.content||'', latency:Date.now()-t0, cost:iT*p.in+oT*p.out, model:MODEL_IDS[model] };
 }
 
 // ── Main callLLM with auto-failover ──────────────────────────────────────────
@@ -204,23 +260,26 @@ async function callLLM(path, messages, env, preferProvider = null) {
   let lastError;
   for (const provider of providers) {
     try {
-      if (provider === 'ollama')       return await callOllama(messages, env, t0);
-      if (provider === 'claude-haiku') return await callClaude('claude-haiku', messages, path, env, t0);
-      if (provider === 'claude-sonnet')return await callClaude('claude-sonnet', messages, path, env, t0);
-      if (provider === 'gemini-flash') return await callGemini('gemini-flash', messages, path, env, t0);
-      if (provider === 'gemini-pro')   return await callGemini('gemini-pro', messages, path, env, t0);
-      if (provider === 'gpt-4o-mini')  return await callOpenAI('gpt-4o-mini', messages, path, env, t0);
-      if (provider === 'gpt-4o')       return await callOpenAI('gpt-4o', messages, path, env, t0);
+      if (provider==='ollama')        return await callOllama(messages, env, t0);
+      if (provider==='groq-70b')      return await callGroq('groq-70b', messages, path, env, t0);
+      if (provider==='groq-8b')       return await callGroq('groq-8b',  messages, path, env, t0);
+      if (provider==='deepseek')      return await callDeepSeek(messages, path, env, t0);
+      if (provider==='claude-haiku')  return await callClaude('claude-haiku',  messages, path, env, t0);
+      if (provider==='claude-sonnet') return await callClaude('claude-sonnet', messages, path, env, t0);
+      if (provider==='gemini-flash')  return await callGemini('gemini-flash',  messages, path, env, t0);
+      if (provider==='gemini-pro')    return await callGemini('gemini-pro',    messages, path, env, t0);
+      if (provider==='gpt-4o-mini')   return await callOpenAI('gpt-4o-mini',  messages, path, env, t0);
+      if (provider==='gpt-4o')        return await callOpenAI('gpt-4o',        messages, path, env, t0);
     } catch(e) {
       lastError = e;
-      const isRateLimit = e.message?.includes('rate') || e.message?.includes('529') || e.message?.includes('quota');
-      console.log(`[brain-router] ${provider} failed (${e.message?.slice(0,60)}), trying next...`);
-      if (!isRateLimit) break;  // nie-rate-limit błąd → nie próbuj dalej
-      continue;  // rate limit → następny provider
+      const isRate = /rate|529|quota|429|overload|insufficient/i.test(e.message||'');
+      console.log(`[brain-router] ${provider} failed: ${e.message?.slice(0,80)}`);
+      if (!isRate) break;
     }
   }
   throw lastError || new Error('All providers exhausted');
 }
+
 
 // ── CORS headers ──────────────────────────────────────────────────────────────
 const CORS = {
@@ -238,8 +297,16 @@ export default {
 
     // ── /health ──────────────────────────────────────────────────────────────
     if (url.pathname === '/health')
-      return json({ status:'ok', service:'brain-router-v2', ts: new Date().toISOString(),
-        architecture: 'zero-exposure', paths: ['reflex','intuitive','deliberate','collective'] });
+      return json({
+        status:'ok', service:'brain-router-v4', ts:new Date().toISOString(),
+        architecture:'zero-exposure-multi-provider',
+        providers:{ groq:!!env.GROQ_API_KEY, deepseek:!!env.DEEPSEEK_API_KEY,
+          claude:!!env.ANTHROPIC_API_KEY, gemini:!!env.GEMINI_API_KEY,
+          openai:!!(env.OPENAI_API_KEY||env.OPENROUTER_API_KEY), ollama:true,
+          cache:!!(env.UPSTASH_URL&&env.UPSTASH_TOKEN) },
+        path_chains:PATH_PROVIDERS,
+        paths:['reflex','intuitive','deliberate','collective'],
+        version:'v4-groq-deepseek-upstash' });
 
     // ── /auth/token — aplikacja dostaje 1h JWT ────────────────────────────────
     if (url.pathname === '/auth/token' && req.method === 'POST') {
@@ -299,6 +366,8 @@ export default {
       if (!body) return json({ error:'invalid_json' }, 400);
 
       const userText = body.prompt || body.messages?.find(m=>m.role==='user')?.content || '';
+      const userId   = body.user_id || appName;
+      const preferProvider = body.prefer_provider || null;
       const userId   = body.user_id || appName;           // track per user
       const preferProvider = body.prefer_provider || null; // e.g. 'gemini-flash' for Kamila speed
       if (!userText) return json({ error:'no_message' }, 400);
@@ -340,8 +409,14 @@ export default {
         ).bind(ck, path, result.model, complexity, result.text).run();
       }
 
-      // Update stats
-      await env.KB_META.prepare(
+      // Upstash cache write
+      const ttl = {reflex:86400,intuitive:21600,deliberate:3600,collective:0}[path]||3600;
+      if (ttl > 0 && urgency !== 'realtime') {
+        await upstashSet(ck, {text:result.text,path,model:result.model,complexity}, ttl, env);
+      }
+
+      // Update stats (D1)
+      try { await env.KB_META.prepare(
         'UPDATE routing_stats SET total_requests=total_requests+1,'
         +'avg_latency_ms=avg_latency_ms*0.85+?*0.15,'
         +'total_cost_usd=total_cost_usd+?,last_used=datetime("now") WHERE path=?'
