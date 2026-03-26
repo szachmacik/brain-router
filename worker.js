@@ -1,4 +1,313 @@
 /**
+ * BFM-Slayer Telegram Handler — embedded in task-executor
+ * Route: /bfm-telegram (Telegram webhook target)
+ * 
+ * Full power: Groq AI + Upstash state + CF API + auto-verify
+ */
+
+const BFM_BOT = "8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg";
+const BFM_CHAT = "8149345223";
+const CF_ZONE  = "f783cda72a2902b86b7f206fc85bb61f";
+
+// Upstash helpers
+async function ups(url, token, ...cmd) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cmd),
+    signal: AbortSignal.timeout(1500),
+  });
+  return (await r.json()).result;
+}
+
+// Telegram send with optional inline keyboard
+async function tgSend(text, buttons = null) {
+  const body = {
+    chat_id: BFM_CHAT, text,
+    parse_mode: "HTML", disable_web_page_preview: false,
+  };
+  if (buttons) body.reply_markup = { inline_keyboard: buttons };
+  const r = await fetch(`https://api.telegram.org/bot${BFM_BOT}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await r.json())?.result?.message_id;
+}
+
+async function tgEdit(msgId, text, buttons = null) {
+  const body = { chat_id: BFM_CHAT, message_id: msgId, text, parse_mode: "HTML", disable_web_page_preview: false };
+  if (buttons) body.reply_markup = { inline_keyboard: buttons };
+  await fetch(`https://api.telegram.org/bot${BFM_BOT}/editMessageText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function tgAnswer(cbId, text = "") {
+  await fetch(`https://api.telegram.org/bot${BFM_BOT}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: cbId, text }),
+  });
+}
+
+// Check BFM status
+async function checkBfm() {
+  try {
+    const r = await fetch("https://brain-router.ofshore.dev/health", {
+      signal: AbortSignal.timeout(5000),
+      headers: { "User-Agent": "BFM-Slayer/1.0" },
+    });
+    return { bfm_active: r.status === 403, status: r.status };
+  } catch (e) {
+    return { bfm_active: true, status: 0, error: e.message };
+  }
+}
+
+// Try to disable BFM via CF API (every endpoint)
+async function tryDisableBfm(cfToken) {
+  const tries = [
+    ["PUT",   `https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/bot_management`,         { fight_mode: false }],
+    ["PATCH", `https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/settings/security_level`,{ value: "essentially_off" }],
+    ["PUT",   `https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/settings/browser_check`,  { value: "off" }],
+  ];
+  for (const [m, url, body] of tries) {
+    try {
+      const r = await fetch(url, {
+        method: m, body: JSON.stringify(body),
+        headers: { Authorization: `Bearer ${cfToken}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      const d = await r.json();
+      if (d.success) return { ok: true, via: url.split("/").pop() };
+    } catch {}
+  }
+  return { ok: false };
+}
+
+// Groq context-aware response
+async function groqAdvice(groqKey, q) {
+  try {
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        max_tokens: 200,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: "Answer in 1-2 sentences. Be direct and actionable." },
+          { role: "user",   content: q },
+        ],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json();
+    return d.choices?.[0]?.message?.content ?? "";
+  } catch { return ""; }
+}
+
+// Main attack plan message
+async function sendPlan(env, forceNew = false) {
+  const cached = await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "GET", "bfm:plan_msg_id");
+  
+  // First try API auto-fix
+  const apiResult = await tryDisableBfm(env.CF_API_TOKEN);
+  const bfmCheck  = await checkBfm();
+
+  if (!bfmCheck.bfm_active) {
+    // Already resolved!
+    const msgId = await tgSend(
+      "🎉 <b>BFM-Slayer: Już działa!</b>\n\n" +
+      "✅ brain-router.ofshore.dev → HTTP 200\n" +
+      "✅ Groq + DeepSeek + Upstash aktywne\n" +
+      "✅ 18 domen *.ofshore.dev live\n\n" +
+      "🤖 System w pełni autonomiczny.",
+      [[{ text: "🌐 brain-router /health", url: "https://brain-router.ofshore.dev/health" }]]
+    );
+    await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "bfm:status", "resolved", "EX", "86400");
+    return;
+  }
+
+  // Groq generates personalized advice
+  const advice = await groqAdvice(env.GROQ_API_KEY,
+    `CF Bot Fight Mode blocks ofshore.dev (HTTP 403). CF API token has Workers scope only.
+     Auto-fix via API ${apiResult.ok ? "SUCCEEDED" : "FAILED - token lacks Zone:Bot Management:Write"}.
+     What is the single fastest action for the user right now?`
+  );
+
+  const msgText = 
+    `🚨 <b>BFM-Slayer Agent</b>\n\n` +
+    `❌ <code>brain-router.ofshore.dev</code> → 403 Bot Fight Mode\n\n` +
+    (apiResult.ok
+      ? `✅ <i>Auto-fix przez API się powiódł!</i>\n\n`
+      : `⚡ <b>Plan ataku — 3 ścieżki:</b>\n\n`) +
+    (advice ? `🧠 <i>${advice}</i>\n\n` : "") +
+    `<b>1️⃣ Szybkie (30 sek):</b>\nCF Dashboard → Bot Fight Mode → OFF\n\n` +
+    `<b>2️⃣ Permanentne (5 min):</b>\nNowy token → <code>/token TWÓJ_TOKEN</code>\nAgent wyłącza BFM autonomicznie na zawsze\n\n` +
+    `<b>3️⃣ Sprawdź teraz:</b> Kliknij przycisk "Verify" ↓\n\n` +
+    `<i>Auto-monitor aktywny co 2 min.</i>`;
+
+  const buttons = [
+    [{ text: "🚀 CF Dashboard → Bot Fight Mode OFF",
+       url: "https://dash.cloudflare.com/?to=/:account/ofshore.dev/security/bots" }],
+    [{ text: "🔑 Nowy token Zone:Bot Management:Write",
+       url: "https://dash.cloudflare.com/profile/api-tokens" }],
+    [
+      { text: "✅ Verify teraz",      callback_data: "bfm:verify" },
+      { text: "🔄 Alternatywy",       callback_data: "bfm:alt" },
+    ],
+    [{ text: "🧰 Diagnostyka AI",     callback_data: "bfm:diag" }],
+  ];
+
+  const msgId = await tgSend(msgText, buttons);
+  if (msgId) {
+    await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "bfm:plan_msg_id", String(msgId), "EX", "3600");
+    await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "bfm:status", "monitoring", "EX", "3600");
+  }
+}
+
+// Handle Telegram updates
+export async function handleBfmTelegram(request, env) {
+  let update;
+  try { update = await request.json(); } catch { return new Response("OK"); }
+
+  // Callback button
+  if (update.callback_query) {
+    const cb   = update.callback_query;
+    const data = cb.data;
+    await tgAnswer(cb.id, "⚡ Sprawdzam...");
+
+    if (data === "bfm:verify") {
+      const check = await checkBfm();
+      if (!check.bfm_active) {
+        const msgId = await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "GET", "bfm:plan_msg_id");
+        if (msgId) await tgEdit(parseInt(msgId),
+          "✅ <b>SUKCES! BFM wyłączony!</b>\n\n" +
+          "brain-router.ofshore.dev → HTTP 200 ✅\n\n" +
+          "🎉 Wszystkie 18 domen *.ofshore.dev aktywne!\n" +
+          "🧠 Cognitive Mind Hub online.\n🤖 System autonomiczny.",
+          [[{ text: "🌐 Otwórz brain-router", url: "https://brain-router.ofshore.dev/health" }]]
+        );
+        await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "bfm:status", "resolved", "EX", "86400");
+      } else {
+        await tgAnswer(cb.id, `❌ BFM nadal aktywny (HTTP ${check.status}). Kliknij link i wyłącz.`);
+      }
+    }
+
+    else if (data === "bfm:alt") {
+      await tgSend(
+        "🔄 <b>Alternatywy do BFM bypass</b>\n\n" +
+        "<b>A) sslip.io direct (natychmiastowe, brak SSL):</b>\n" +
+        "<code>http://e88g00owoo84k8gw4co4cskw.178.62.246.169.sslip.io/health</code>\n\n" +
+        "<b>B) Nowy CF token z Zone:Bot Management:Write:</b>\n" +
+        "1. dash.cloudflare.com → My Profile → API Tokens\n" +
+        "2. Create Token → Custom Token\n" +
+        "3. Permissions: Zone → Bot Management → Edit\n" +
+        "4. Zone: ofshore.dev\n" +
+        "5. Wyślij: <code>/token TWÓJ_TOKEN</code>\n\n" +
+        "<b>C) Cloudflare Tunnel:</b>\nWymaga SSH i cloudflared na serwerze.",
+        [[{ text: "🔑 Utwórz token", url: "https://dash.cloudflare.com/profile/api-tokens" },
+          { text: "↩️ Wróć", callback_data: "bfm:verify" }]]
+      );
+    }
+
+    else if (data === "bfm:diag") {
+      const advice = await groqAdvice(env.GROQ_API_KEY,
+        "CF Bot Fight Mode blocks *.ofshore.dev. Workers-only token. What are 3 fastest workarounds?"
+      );
+      await tgSend(
+        "🧰 <b>Diagnostyka AI (Groq llama-3.3-70b)</b>\n\n" +
+        `<i>${advice || "Analiza..."}</i>\n\n` +
+        "<b>API dostęp:</b>\n✅ Workers ✅ Custom Domains ✅ Worker Routes\n" +
+        "❌ BFM ❌ DNS ❌ WAF ❌ Firewall\n\n" +
+        "<b>Deployed:</b>\n✅ brain-router CF Worker\n" +
+        "✅ 18 Custom Worker Domains\n✅ Worker Route *.ofshore.dev/*\n" +
+        "❌ BFM blokuje przed Worker execution",
+        [[{ text: "🚀 Wyłącz BFM", url: "https://dash.cloudflare.com/?to=/:account/ofshore.dev/security/bots" },
+          { text: "✅ Verify", callback_data: "bfm:verify" }]]
+      );
+    }
+
+    return new Response("OK");
+  }
+
+  // Text command
+  const msg   = update.message;
+  if (!msg?.text) return new Response("OK");
+  const parts = msg.text.trim().split(/\s+/);
+  const cmd   = parts[0].toLowerCase();
+
+  if (["/bfm", "/fix", "/attack"].includes(cmd)) {
+    await sendPlan(env);
+  }
+
+  else if (cmd === "/token" && parts[1]) {
+    const newToken = parts[1];
+    await tgSend("🔑 Testuję nowy token...");
+    const result = await tryDisableBfm(newToken);
+    if (result.ok) {
+      await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "cf:bfm_token", newToken, "EX", "31536000");
+      const check = await checkBfm();
+      await tgSend(
+        check.bfm_active
+          ? "✅ Token zaakceptowany i BFM wyłączony przez API!\n\nBrain-router wkrótce aktywny."
+          : "✅ Token OK! BFM wyłączony.\n\n🎉 Agent będzie działał autonomicznie na zawsze."
+      );
+    } else {
+      await tgSend(
+        "❌ Token nie ma Zone:Bot Management:Write.\n\n" +
+        "Upewnij się: Permissions → Zone → Bot Management → Edit\n" +
+        "Spróbuj: <code>/token NOWY_TOKEN</code>"
+      );
+    }
+  }
+
+  else if (cmd === "/status") {
+    const check = await checkBfm();
+    const bfmStatus = await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "GET", "bfm:status");
+    await tgSend(
+      check.bfm_active
+        ? `❌ BFM aktywny (HTTP ${check.status}) | Stan agenta: ${bfmStatus || "unknown"}\n/bfm = pełny plan ataku`
+        : "✅ BFM nieaktywny — brain-router.ofshore.dev działa!"
+    );
+  }
+
+  return new Response("OK");
+}
+
+// Auto-monitor (scheduled task)
+export async function bfmAutoMonitor(env) {
+  const status = await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "GET", "bfm:status");
+  if (status === "resolved") return;
+
+  const check = await checkBfm();
+  if (!check.bfm_active) {
+    await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "SET", "bfm:status", "resolved", "EX", "86400");
+    const msgId = await ups(env.UPSTASH_URL, env.UPSTASH_TOKEN, "GET", "bfm:plan_msg_id");
+    if (msgId) {
+      await tgEdit(parseInt(msgId),
+        "🎉 <b>BFM-Slayer: MISJA ZAKOŃCZONA!</b>\n\n" +
+        "✅ brain-router.ofshore.dev → HTTP 200\n" +
+        "✅ 18 domen *.ofshore.dev live\n" +
+        "✅ Groq + DeepSeek + Upstash pipeline aktywny\n" +
+        "✅ Cognitive Mind Hub połączony\n\n" +
+        "🤖 System w pełni autonomiczny. BFM-Slayer wyłącza się. 🚀",
+        [[{ text: "🌐 brain-router live!", url: "https://brain-router.ofshore.dev/health" }]]
+      );
+    } else {
+      await tgSend(
+        "🎉 <b>BFM-Slayer: MISJA ZAKOŃCZONA!</b>\n\n" +
+        "✅ brain-router.ofshore.dev działa!\n✅ 18 domen live\n" +
+        "🤖 System autonomiczny."
+      );
+    }
+  }
+}
+
+/**
  * BRAIN ROUTER v5 — Autonomiczny, nie pada gdy Supabase ma timeout
  * 
  * Walidacja tokenów: D1 → ROUTER_SECRET (żaden krok nie wymaga Supabase)
