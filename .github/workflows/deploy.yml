@@ -1,13 +1,19 @@
-name: Deploy Brain Router
+name: Deploy Brain Router to CF Workers
+
 on:
   push:
     branches: [main]
+    paths: ['worker.js', 'wrangler.toml']
+  workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to Coolify
-        run: |
-          curl -X GET "${{ secrets.COOLIFY_URL }}/api/v1/applications/${{ secrets.COOLIFY_APP_UUID }}/restart" \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}" \
-            -H "Content-Type: application/json"
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
