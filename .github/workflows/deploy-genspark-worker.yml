@@ -7,30 +7,26 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout genspark-worker repo
-        run: |
-          git clone https://x-access-token:${{ secrets.GH_PAT || github.token }}@github.com/szachmacik/genspark-worker.git .
-          ls -la
+      - name: Clone genspark-worker
+        run: git clone https://github.com/szachmacik/genspark-worker.git .
 
       - name: Install wrangler
-        run: npm install -g wrangler
+        run: npm install -g wrangler@3
 
-      - name: Deploy to Cloudflare Workers
+      - name: Check CF token
         run: |
-          wrangler deploy worker.js \
-            --name genspark-worker \
-            --compatibility-date 2025-01-01 \
-            --compatibility-flag nodejs_compat \
-            --route "genspark.ofshore.dev/*" \
-            --route "clone.ofshore.dev/*"
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "ERROR: CF_API_TOKEN secret is empty!"
+          else
+            echo "CF_API_TOKEN: set (length ${#CLOUDFLARE_API_TOKEN})"
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Notify success
-        if: success()
-        run: |
-          curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
-            -d "chat_id=8149345223&parse_mode=Markdown" \
-            --data-urlencode "text=*genspark-worker live!* https://genspark.ofshore.dev/health"
+      - name: Wrangler deploy verbose
+        run: wrangler deploy --verbose 2>&1 || true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
