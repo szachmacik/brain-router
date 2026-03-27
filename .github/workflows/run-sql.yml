@@ -1,0 +1,56 @@
+name: Run Supabase SQL
+
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: 'SQL to run'
+        required: false
+        default: 'SELECT current_database()'
+
+jobs:
+  sql:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run SQL via Management API
+        env:
+          SB_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SB_PAT: ${{ secrets.SUPABASE_PAT }}
+        run: |
+          PROJECT=blgdhfcosqjzrutncbbr
+          SQL='${{ github.event.inputs.sql }}'
+          
+          # Try Management API with PAT
+          if [ -n "$SB_PAT" ]; then
+            echo "Trying Management API..."
+            RESULT=$(curl -sf -X POST "https://api.supabase.com/v1/projects/$PROJECT/database/query" \
+              -H "Authorization: Bearer $SB_PAT" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"$SQL\"}" 2>&1)
+            echo "Result: $RESULT" | head -c 500
+          fi
+          
+          # Try direct REST with service key
+          if [ -n "$SB_KEY" ]; then
+            echo "Trying REST RPC..."
+            RESULT2=$(curl -sf -X POST "https://$PROJECT.supabase.co/rest/v1/rpc/exec_sql" \
+              -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"sql\": \"$SQL\"}" 2>&1)
+            echo "REST result: $RESULT2" | head -c 300
+          fi
+
+      - name: Create autonomous schema
+        env:
+          SB_PAT: ${{ secrets.SUPABASE_PAT }}
+        run: |
+          PROJECT=blgdhfcosqjzrutncbbr
+          if [ -z "$SB_PAT" ]; then echo "No PAT"; exit 0; fi
+          
+          SQL="CREATE SCHEMA IF NOT EXISTS autonomous; CREATE TABLE IF NOT EXISTS autonomous.sandbox_cartridges (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, created_at timestamptz DEFAULT now(), name text NOT NULL, slug text UNIQUE NOT NULL, source_url text NOT NULL, category text DEFAULT 'ai', status text DEFAULT 'idle', owner text DEFAULT 'maciej', is_private boolean DEFAULT true); CREATE TABLE IF NOT EXISTS autonomous.clone_patterns (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, created_at timestamptz DEFAULT now(), clone_id text NOT NULL, product_url text NOT NULL, product_name text, analysis_json jsonb DEFAULT '{}'); CREATE TABLE IF NOT EXISTS autonomous.clone_jobs (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, created_at timestamptz DEFAULT now(), clone_id text UNIQUE NOT NULL, source_url text NOT NULL, clone_name text, status text DEFAULT 'pending', analysis jsonb DEFAULT '{}'); CREATE TABLE IF NOT EXISTS autonomous.onepass_sessions (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, created_at timestamptz DEFAULT now(), expires_at timestamptz DEFAULT now() + interval '24 hours', token text UNIQUE NOT NULL DEFAULT gen_random_uuid()::text, email text, is_valid boolean DEFAULT true);"
+          
+          RESULT=$(curl -sf -X POST "https://api.supabase.com/v1/projects/$PROJECT/database/query" \
+            -H "Authorization: Bearer $SB_PAT" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\": \"$SQL\"}" 2>&1)
+          echo "Schema: $RESULT" | head -c 300
