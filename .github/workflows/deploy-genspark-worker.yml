@@ -13,20 +13,40 @@ jobs:
       - name: Install wrangler
         run: npm install -g wrangler@3
 
-      - name: Check CF token
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "ERROR: CF_API_TOKEN secret is empty!"
-          else
-            echo "CF_API_TOKEN: set (length ${#CLOUDFLARE_API_TOKEN})"
-          fi
+      - name: Deploy genspark-worker to CF
+        run: wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Wrangler deploy verbose
-        run: wrangler deploy --verbose 2>&1 || true
+      - name: Add CF routes
+        run: |
+          ZONE_ID=$(curl -sf "https://api.cloudflare.com/client/v4/zones?name=ofshore.dev" \
+            -H "Authorization: Bearer $CF_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"result\"][0][\"id\"])")
+          echo "Zone: $ZONE_ID"
+          # genspark.ofshore.dev
+          curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/workers/routes" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"pattern\":\"genspark.ofshore.dev/*\",\"script\":\"genspark-worker\"}" || true
+          # clone.ofshore.dev
+          curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/workers/routes" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"pattern\":\"clone.ofshore.dev/*\",\"script\":\"genspark-worker\"}" || true
+          echo "Routes added"
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+
+      - name: Test health
+        run: |
+          sleep 10
+          curl -sf "https://genspark-worker.maciej-koziej01.workers.dev/health" || true
+          curl -sf "https://genspark.ofshore.dev/health" || true
+
+      - name: Notify
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
+            -d "chat_id=8149345223" \
+            --data-urlencode "text=genspark-worker deploy: $STATUS https://genspark.ofshore.dev/health"
 
