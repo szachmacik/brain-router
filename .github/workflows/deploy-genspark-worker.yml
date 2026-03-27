@@ -1,0 +1,31 @@
+name: Deploy genspark-worker from brain-router
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-genspark-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout genspark-worker
+        uses: actions/checkout@v4
+        with:
+          repository: szachmacik/genspark-worker
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          workingDirectory: "."
+
+      - name: Notify Telegram
+        run: |
+          curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
+            -d "chat_id=8149345223" \
+            -d "parse_mode=Markdown" \
+            --data-urlencode "text=✅ *genspark-worker deployed!*
+
+https://genspark.ofshore.dev/health"
+
