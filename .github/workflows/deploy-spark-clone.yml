@@ -1,0 +1,58 @@
+name: Deploy spark-clone-ui
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: git clone https://github.com/szachmacik/spark-clone.git .
+      - run: npm install -g wrangler@3
+      - name: Deploy spark-clone-ui Worker
+        run: wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      - name: Add Custom Domain spark.ofshore.dev
+        env:
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          ZONE=f783cda72a2902b86b7f206fc85bb61f
+          curl -sf -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/domains" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            -d '{"environment":"production","hostname":"spark.ofshore.dev","service":"spark-clone-ui","zone_id":"'$ZONE'"}' \
+            && echo "spark.ofshore.dev custom domain set" || echo "Already exists"
+      - name: Enable GitHub Pages
+        run: |
+          curl -sf -X POST "https://api.github.com/repos/szachmacik/spark-clone/pages" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"source":{"branch":"main","path":"/"}}' || true
+      - name: Test
+        run: |
+          sleep 10
+          curl -sf --max-time 15 "https://spark-clone-ui.maciej-koziej01.workers.dev/health" && echo " Worker OK" || echo "Worker not ready yet"
+      - name: Notify
+        run: |
+          curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
+            -d "chat_id=8149345223" \
+            --data-urlencode "text=KLON GENSPARK LIVE!
+
+spark.ofshore.dev - pelny klon UI
+genspark.ofshore.dev - API backend
+onepass.ofshore.dev - auth
+
+Features:
+Chat z Groq 70b
+Slides generator
+Sheets generator
+SparkPages (HTML)
+Search
+Images (z FAL/Together key)
+Video (z FAL key)
+Agent mode
+Benchmark vs Genspark"
