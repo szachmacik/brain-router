@@ -45,6 +45,25 @@ jobs:
               echo "Custom domain exists: $domain (id=$EXIST)"
             fi
           done
+      - name: Deploy spark-clone-ui
+        run: |
+          git clone https://github.com/szachmacik/spark-clone.git /tmp/spark-clone
+          cd /tmp/spark-clone
+          npx wrangler@3 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      - name: Add spark.ofshore.dev Custom Domain
+        env:
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          ZONE=f783cda72a2902b86b7f206fc85bb61f
+          curl -sf -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/domains" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"environment\":\"production\",\"hostname\":\"spark.ofshore.dev\",\"service\":\"spark-clone-ui\",\"zone_id\":\"$ZONE\"}" \
+            && echo "spark.ofshore.dev done" || echo "Domain error (may already exist)"
+
       - name: Test
         run: |
           sleep 20
