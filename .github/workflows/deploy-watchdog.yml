@@ -1,0 +1,78 @@
+name: Deploy ofshore-watchdog
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create and deploy watchdog
+        run: |
+          mkdir watchdog && cd watchdog
+          cat > worker.js << 'WORKEREOF'
+
+// ofshore-watchdog: calls sentinel /scan periodically via Upstash QStash or cron
+// Used as external cron trigger for Sentinel (free plan workaround)
+
+const SENTINEL = "https://sentinel.maciej-koziej01.workers.dev";
+const TG = "8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg";
+const CHAT = "8149345223";
+const UPS = "https://fresh-walleye-84119.upstash.io";
+const UT  = "gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk";
+
+async function runScan() {
+  try {
+    const r = await fetch(SENTINEL + "/scan", { signal: AbortSignal.timeout(30000) });
+    const d = await r.json();
+    const ok = d.results?.filter(x=>x.ok).length || 0;
+    const total = d.results?.length || 0;
+    const failed = d.failed || [];
+    
+    // Store last scan
+    await fetch(UPS+"/set/sentinel:watchdog_last_scan/"+encodeURIComponent(JSON.stringify({
+      ok, total, failed, ts: new Date().toISOString()
+    }))+"?ex=600", {method:"POST", headers:{"Authorization":"Bearer "+UT}});
+    
+    // Alert if critical failures
+    if(failed.length > 0) {
+      await fetch("https://api.telegram.org/bot"+TG+"/sendMessage",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          chat_id:CHAT, parse_mode:"Markdown",
+          text:"🚨 *Watchdog Alert*\n\nDown: "+failed.join(", ")+"\nTotal: "+ok+"/"+total+" OK"
+        })
+      });
+    }
+    return {ok:true, endpoints:ok+"/"+total, failed};
+  } catch(e) {
+    return {ok:false, error:String(e).slice(0,100)};
+  }
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if(url.pathname === "/health") return Response.json({ok:true, service:"ofshore-watchdog"});
+    if(url.pathname === "/run")    return Response.json(await runScan());
+    return Response.json({endpoints:["/health","/run"]});
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runScan());
+  }
+};
+
+WORKEREOF
+          cat > wrangler.toml << 'TOMLEOF'
+name = "ofshore-watchdog"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+TOMLEOF
+          wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      - name: Test watchdog
+        run: |
+          sleep 8
+          curl -sf "https://ofshore-watchdog.maciej-koziej01.workers.dev/run" | head -c 200
