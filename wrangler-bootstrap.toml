@@ -1,0 +1,10 @@
+name = "bootstrap-deployer"
+main = "deploy-bootstrap.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+
+# Secrets inherited from wrangler secret put:
+# COOLIFY_TOKEN, SUPABASE_SERVICE_KEY, CF_API_TOKEN, CF_ACCOUNT_ID
