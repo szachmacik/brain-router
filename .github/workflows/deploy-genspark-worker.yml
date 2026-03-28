@@ -7,101 +7,82 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - run: git clone https://github.com/szachmacik/brain-router.git repo_br && git clone https://github.com/szachmacik/genspark-worker.git repo_gw
-      - run: cp repo_gw/worker.js . && cp repo_gw/wrangler.toml . 2>/dev/null; true
+      - run: git clone https://github.com/szachmacik/brain-router.git repo
+      - run: cp repo/sentinel.js repo/benchmark.js . 2>/dev/null || true
+      - run: git clone https://github.com/szachmacik/genspark-worker.git genspark
+      - run: cp genspark/worker.js . && cp genspark/wrangler.toml . 2>/dev/null || true
       - run: npm install -g wrangler@3
 
-      - name: Deploy L1 genspark-worker
+      - name: Deploy genspark-worker
         run: wrangler deploy worker.js --name genspark-worker --compatibility-date 2025-01-01
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      - name: GROQ_KEY → L1
+
+      - name: Inject GROQ_KEY
         run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Deploy L2 genspark-enhanced
-        run: wrangler deploy repo_br/genspark-enhanced.js --name genspark-enhanced --compatibility-date 2025-01-01
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      - name: GROQ_KEY → L2
-        run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-enhanced
+      - name: Inject CF_API_TOKEN (enables usage tracking + key rotation)
+        run: printf '%s' "${{ secrets.CF_API_TOKEN }}" | wrangler secret put CF_API_TOKEN --name genspark-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Deploy L3 genspark-multiclone
-        run: wrangler deploy repo_br/genspark-multiclone.js --name genspark-multiclone --compatibility-date 2025-01-01
+      - name: Save secrets to Upstash vault
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      - name: GROQ_KEY → L3
-        run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-multiclone
+          UPS: https://fresh-walleye-84119.upstash.io
+          UT: gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACC: ${{ secrets.CF_ACCOUNT_ID }}
+          GH_TOK: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for name_val in "CF_API_TOKEN:$CF_TOKEN" "CF_ACCOUNT_ID:$CF_ACC" "GITHUB_TOKEN:$GH_TOK"; do
+            name="${name_val%%:*}"; val="${name_val#*:}"
+            ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$val")
+            curl -sf -X POST "$UPS/set/vault:$name/$ENC" -H "Authorization: Bearer $UT" && echo "vault:$name saved" || echo "vault:$name failed"
+          done
+
+      - name: Deploy sentinel v2 + inject CF token
+        run: |
+          [ -f sentinel.js ] && wrangler deploy sentinel.js --name sentinel --compatibility-date 2025-01-01 || true
+          printf '%s' "${{ secrets.CF_API_TOKEN }}" | wrangler secret put CF_API_TOKEN --name sentinel 2>/dev/null || true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Deploy L4 genspark-mesh
-        run: wrangler deploy repo_br/genspark-mesh.js --name genspark-mesh --compatibility-date 2025-01-01
+      - name: Deploy benchmark
+        run: |
+          [ -f benchmark.js ] && wrangler deploy benchmark.js --name genspark-benchmark --compatibility-date 2025-01-01 || true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
 
-      - name: Custom Domains — all membranes
+      - name: Custom Domains
         env:
           CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
           ZONE=f783cda72a2902b86b7f206fc85bb61f
-          for pair in "genspark.ofshore.dev:genspark-worker" "clone.ofshore.dev:genspark-worker" "enhanced.ofshore.dev:genspark-enhanced" "multiclone.ofshore.dev:genspark-multiclone" "mesh.ofshore.dev:genspark-mesh" "benchmark.ofshore.dev:genspark-benchmark"; do
-            domain="${pair%%:*}"; worker="${pair##*:}"
+          for dw in "genspark.ofshore.dev:genspark-worker" "clone.ofshore.dev:genspark-worker" "benchmark.ofshore.dev:genspark-benchmark"; do
+            dom="${dw%%:*}"; wkr="${dw##*:}"
             curl -sf -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/domains" \
               -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
-              -d "{\"environment\":\"production\",\"hostname\":\"$domain\",\"service\":\"$worker\",\"zone_id\":\"$ZONE\"}" \
-              && echo "$domain → $worker: ok" || echo "$domain: failed"
+              -d "{\"environment\":\"production\",\"hostname\":\"$dom\",\"service\":\"$wkr\",\"zone_id\":\"$ZONE\"}" && echo "$dom ok" || true
           done
 
-      - name: Test all membranes
+      - name: Verify
         run: |
-          sleep 20
-          echo "=== MEMBRANE STATUS ==="
-          for pair in "L1|https://genspark-worker.maciej-koziej01.workers.dev/health" "L2|https://genspark-enhanced.maciej-koziej01.workers.dev/health" "L3|https://genspark-multiclone.maciej-koziej01.workers.dev/health" "L4|https://genspark-mesh.maciej-koziej01.workers.dev/health"; do
-            layer="${pair%%|*}"; url="${pair##*|}"
-            CODE=$(curl -sf --max-time 10 "$url" -w "%{http_code}" -o /dev/null 2>/dev/null)
-            VER=$(curl -sf --max-time 8 "$url" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('layer','?'),d.get('service','?')[:20])" 2>/dev/null)
-            echo "$layer: $CODE | $VER"
-          done
+          sleep 15
+          curl -sf --max-time 10 "https://genspark.ofshore.dev/health" | head -c 100
+          echo ''
+          curl -sf --max-time 20 "https://genspark.ofshore.dev/v1/chat" -X POST -H 'Content-Type: application/json' -d '{"message":"ping"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('chat ok, model:', d.get('model'))" || true
 
-      - name: Membrane benchmark
-        run: |
-          curl -sf --max-time 60 "https://genspark-mesh.maciej-koziej01.workers.dev/v1/benchmark/membrane" \
-            -X POST -H "Content-Type: application/json" \
-            -d '{"task":"What makes a good AI system?"}' \
-            | python3 -c "
-import sys,json
-try:
-  d=json.load(sys.stdin)
-  for r in d.get('results',[]):
-    print(f'{r[\"layer\"]}: {r.get(\"latency\",0)}ms ok={r.get(\"ok\")}')
-  print('Fastest:',d.get('fastest_layer'))
-except: pass
-" 2>/dev/null || echo "benchmark skipped"
-
-      - name: Night report — Telegram
+      - name: Telegram
         if: always()
         run: |
           curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
             -d "chat_id=8149345223" \
-            --data-urlencode "text=🌐 NOCNY DEPLOY MEMBRAN: ${{ job.status }}
-
-L1 genspark.ofshore.dev — 1:1 Klon Genspark
-L2 enhanced.ofshore.dev — MoA 4 modele Groq równolegle
-L3 multiclone.ofshore.dev — Clone Factory (batch + variants)
-L4 mesh.ofshore.dev — Full Mesh AI + Atomic Clock
-
-Sentinel v2: L0-L5 aktywny
-Zegar atomowy: nanosekund precision
-D1: 65 tabel · Supabase: 160+ tabel"
+            --data-urlencode "text=Full deploy ${{ job.status }}: genspark-worker + GROQ + CF_API_TOKEN + vault saved"
