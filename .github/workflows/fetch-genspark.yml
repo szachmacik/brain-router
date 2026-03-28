@@ -1,0 +1,22 @@
+name: Deploy fetch-proxy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: git clone https://github.com/szachmacik/genspark-worker.git .
+      - run: npm install -g wrangler@3
+      - name: Deploy fetch-proxy
+        run: wrangler deploy fetch-proxy.js --name genspark-fetch-proxy --compatibility-date 2025-01-01
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      - name: Get Genspark HTML
+        run: |
+          sleep 8
+          curl -sf "https://genspark-fetch-proxy.maciej-koziej01.workers.dev/fetch?url=https://genspark.ai"             -o /tmp/genspark.html --max-time 30
+          wc -c /tmp/genspark.html
+          head -c 2000 /tmp/genspark.html
