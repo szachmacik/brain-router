@@ -1,0 +1,91 @@
+name: Deploy all membranes NOW
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [genspark-enhanced.js, genspark-multiclone.js, genspark-mesh.js]
+
+jobs:
+  membranes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: git clone https://github.com/szachmacik/brain-router.git .
+      - run: git clone https://github.com/szachmacik/genspark-worker.git gw && cp gw/worker.js . && cp gw/wrangler.toml . 2>/dev/null; true
+      - run: npm install -g wrangler@3
+
+      - name: L1
+        run: wrangler deploy worker.js --name genspark-worker --compatibility-date 2025-01-01
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: GROQ L1
+        run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: L2
+        run: wrangler deploy genspark-enhanced.js --name genspark-enhanced --compatibility-date 2025-01-01
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: GROQ L2
+        run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-enhanced
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: L3
+        run: wrangler deploy genspark-multiclone.js --name genspark-multiclone --compatibility-date 2025-01-01
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: GROQ L3
+        run: printf '%s' "${{ secrets.GROQ_KEY }}" | wrangler secret put GROQ_KEY --name genspark-multiclone
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: L4
+        run: wrangler deploy genspark-mesh.js --name genspark-mesh --compatibility-date 2025-01-01
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: Domains
+        env:
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          ZONE=f783cda72a2902b86b7f206fc85bb61f
+          for p in "enhanced.ofshore.dev:genspark-enhanced" "multiclone.ofshore.dev:genspark-multiclone" "mesh.ofshore.dev:genspark-mesh"; do
+            d="${p%%:*}"; w="${p##*:}"
+            curl -sf -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/domains" \
+              -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+              -d "{\"environment\":\"production\",\"hostname\":\"$d\",\"service\":\"$w\",\"zone_id\":\"$ZONE\"}" \
+              && echo "$d: ok" || true
+          done
+
+      - name: Test
+        run: |
+          sleep 20
+          for url in "https://genspark-worker.maciej-koziej01.workers.dev/health" "https://genspark-enhanced.maciej-koziej01.workers.dev/health" "https://genspark-multiclone.maciej-koziej01.workers.dev/health" "https://genspark-mesh.maciej-koziej01.workers.dev/health"; do
+            CODE=$(curl -sf --max-time 10 "$url" -o /tmp/h.json -w "%{http_code}" 2>/dev/null)
+            SVC=$(python3 -c "import json; d=json.load(open('/tmp/h.json')); print(d.get('layer','?'),d.get('service','?')[:20])" 2>/dev/null)
+            echo "$url: $CODE | $SVC"
+          done
+
+      - name: Report
+        if: always()
+        run: |
+          curl -s "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
+            -d "chat_id=8149345223" \
+            --data-urlencode "text=🧬 MEMBRANE SYSTEM: ${{ job.status }}
+L1 genspark.ofshore.dev ← 1:1 Genspark
+L2 enhanced.ofshore.dev ← MoA 4 modele
+L3 multiclone.ofshore.dev ← Clone Factory
+L4 mesh.ofshore.dev ← Full Mesh + Atomic"
