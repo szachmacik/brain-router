@@ -11,16 +11,50 @@ concurrency:
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
-      - name: Parallel Beat
+      - name: Fan-out beat
+        env:
+          UPS: https://fresh-walleye-84119.upstash.io
+          UPT: gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk
+          TG: 8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg
         run: |
-          curl -sf https://inshallah-worker.maciej-koziej01.workers.dev/scan &
-          curl -sf https://capacity-poller.maciej-koziej01.workers.dev/scan &
-          curl -sf -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/mitosis -H 'Content-Type:application/json' -d '{"count":3}' &
-          curl -sf -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_pacemaker","tokens_in":150,"tokens_out":75,"ops":2,"calls":1}' &
-          curl -sf -X POST https://sol-luna.maciej-koziej01.workers.dev/observe -H 'Content-Type:application/json' -d '{}' &
-          curl -sf -X POST https://planetary-mesh.maciej-koziej01.workers.dev/pulse -H 'Content-Type:application/json' -d '{}' &
-          curl -sf -X POST https://brick-producer.maciej-koziej01.workers.dev/cycle -H 'Content-Type:application/json' -d '{"force":true}' &
+          echo "=== HOLON PACEMAKER BEAT ==="
+          
+          # Fan-out: all 7 workers in parallel
+          sentinel=$(curl -sf -w "%{http_code}" -o /tmp/s.json https://inshallah-worker.maciej-koziej01.workers.dev/scan 2>&1) &
+          vagus=$(curl -sf -w "%{http_code}" -o /tmp/v.json https://capacity-poller.maciej-koziej01.workers.dev/scan 2>&1) &
+          mito=$(curl -sf -w "%{http_code}" -o /tmp/m.json -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/mitosis -H 'Content-Type:application/json' -d '{"count":5}' 2>&1) &
+          prime=$(curl -sf -w "%{http_code}" -o /tmp/p.json -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_beat","tokens_in":200,"tokens_out":100,"ops":2,"calls":1}' 2>&1) &
+          brick=$(curl -sf -w "%{http_code}" -o /tmp/b.json -X POST https://brick-producer.maciej-koziej01.workers.dev/cycle -H 'Content-Type:application/json' -d '{"force":true}' 2>&1) &
+          sol=$(curl -sf -w "%{http_code}" -o /tmp/l.json -X POST https://sol-luna.maciej-koziej01.workers.dev/observe -H 'Content-Type:application/json' -d '{}' 2>&1) &
+          planet=$(curl -sf -w "%{http_code}" -o /tmp/pl.json -X POST https://planetary-mesh.maciej-koziej01.workers.dev/pulse -H 'Content-Type:application/json' -d '{}' 2>&1) &
           wait
-          echo "Beat complete $(date)"
+          
+          # Count alive
+          alive=0
+          for f in /tmp/s.json /tmp/v.json /tmp/m.json /tmp/p.json /tmp/b.json /tmp/l.json /tmp/pl.json; do
+            if [ -f "$f" ] && [ -s "$f" ]; then
+              alive=$((alive+1))
+            fi
+          done
+          health=$((alive*100/7))
+          
+          echo "Alive: $alive/7 ($health%)"
+          
+          # Get beat count from Upstash
+          bn=$(curl -sf "$UPS/get/holon%3Apacemaker%3Abeat_count" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result','0'))" 2>/dev/null || echo "0")
+          bn=$((bn+1))
+          
+          # Save to Upstash
+          state="{\"beat\":$bn,\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"alive\":$alive,\"total\":7,\"health\":$health,\"source\":\"gh_actions\"}"
+          curl -sf "$UPS/set/holon%3Apacemaker%3Alast_beat/$(python3 -c "import urllib.parse;print(urllib.parse.quote('$state'))")?ex=86400" -X POST -H "Authorization: Bearer $UPT" > /dev/null
+          curl -sf "$UPS/set/holon%3Apacemaker%3Abeat_count/$bn?ex=31536000" -X POST -H "Authorization: Bearer $UPT" > /dev/null
+          
+          # TG report every 6th beat or if health < 70%
+          if [ $((bn % 6)) -eq 0 ] || [ $health -lt 70 ]; then
+            msg="GH BEAT #$bn | $alive/7 ($health%)"
+            curl -sf -X POST "https://api.telegram.org/bot$TG/sendMessage" -H 'Content-Type:application/json' -d "{"chat_id":"8149345223","text":"$msg"}" > /dev/null
+          fi
+          
+          echo "Beat #$bn complete. Health: $health%"
