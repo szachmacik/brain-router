@@ -1,30 +1,26 @@
 name: HOLON Pacemaker
 on:
   schedule:
-    - cron: '*/15 * * * *'  # co 15 min
-  workflow_dispatch:  # manual trigger
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: pacemaker
+  cancel-in-progress: true
 
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Sentinel Scan
-        run: curl -sf https://inshallah-worker.maciej-koziej01.workers.dev/scan || true
-      - name: Vagus Scan
-        run: curl -sf https://capacity-poller.maciej-koziej01.workers.dev/scan || true
-      - name: Mitosis
-        run: curl -sf -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/mitosis -H 'Content-Type:application/json' -d '{"count":3}' || true
-      - name: PRIME Trading
-        run: curl -sf -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_actions","tokens_in":150,"tokens_out":75,"ops":2,"calls":1}' || true
-      - name: Sol Luna
-        run: curl -sf -X POST https://sol-luna.maciej-koziej01.workers.dev/observe -H 'Content-Type:application/json' -d '{}' || true
-      - name: Planetary
-        run: curl -sf -X POST https://planetary-mesh.maciej-koziej01.workers.dev/pulse -H 'Content-Type:application/json' -d '{}' || true
-      - name: Brick Cycle
-        run: curl -sf -X POST https://brick-producer.maciej-koziej01.workers.dev/cycle -H 'Content-Type:application/json' -d '{"force":true}' || true
-      - name: Report
+      - name: Parallel Beat
         run: |
-          curl -sf -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
-            -H 'Content-Type:application/json' \
-            -d '{"chat_id":"8149345223","text":"GH Actions Pacemaker beat complete"}' || true
+          curl -sf https://inshallah-worker.maciej-koziej01.workers.dev/scan &
+          curl -sf https://capacity-poller.maciej-koziej01.workers.dev/scan &
+          curl -sf -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/mitosis -H 'Content-Type:application/json' -d '{"count":3}' &
+          curl -sf -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_pacemaker","tokens_in":150,"tokens_out":75,"ops":2,"calls":1}' &
+          curl -sf -X POST https://sol-luna.maciej-koziej01.workers.dev/observe -H 'Content-Type:application/json' -d '{}' &
+          curl -sf -X POST https://planetary-mesh.maciej-koziej01.workers.dev/pulse -H 'Content-Type:application/json' -d '{}' &
+          curl -sf -X POST https://brick-producer.maciej-koziej01.workers.dev/cycle -H 'Content-Type:application/json' -d '{"force":true}' &
+          wait
+          echo "Beat complete $(date)"
