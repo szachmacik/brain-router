@@ -1,0 +1,55 @@
+name: HOLON Deploy All
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Import n8n workflows
+        run: |
+          N8N="https://n8n.ofshore.dev"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          echo "Importing n8n workflows from Upstash..."
+          for wf in ai_chat_proxy pacemaker_bridge gpt_bridge gemini_bridge; do
+            WF_JSON=$(curl -sf "$UPS/get/holon%3An8n_workflow%3A$wf" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;print(json.loads(sys.stdin.read()).get('result','{}'))")
+            if [ -n "$WF_JSON" ] && [ "$WF_JSON" != "{}" ]; then
+              # Try to create workflow via n8n API
+              RESULT=$(curl -sfm 15 -X POST "$N8N/api/v1/workflows"                 -H "Content-Type: application/json"                 -d "$WF_JSON" 2>&1 || echo "needs_auth")
+              echo "  $wf: $RESULT" | head -c 100
+              echo
+            fi
+          done
+          
+      - name: Test gateway from GH Actions
+        run: |
+          W="maciej-koziej01.workers.dev"
+          for model in auto claude gpt-4o-mini llama-3.3-70b gemini-2.0-flash; do
+            RESULT=$(curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d "{"model":"$model","messages":[{"role":"user","content":"Say OK in one word"}]}" 2>&1)
+            PROVIDER=$(echo "$RESULT" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('_holon',{}).get('provider','?'),d.get('model','?'),d.get('_holon',{}).get('ms',0),'ms')" 2>/dev/null || echo "error")
+            echo "  $model → $PROVIDER"
+          done
+          
+      - name: Seed Supabase patterns
+        run: |
+          SB="https://blgdhfcosqjzrutncbbr.supabase.co"
+          KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsZ2RoZmNvc3FqenJ1dG5jYmJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI0ODM2NTAsImV4cCI6MjA1ODA1OTY1MH0.ipkAVCHmO0cJk5fvVHyFp5KeYVpDp0ZZXP-E40RKo_c"
+          
+          for code in GW_SEED MESH_SEED ECON_SEED IMM_SEED NEU_SEED; do
+            curl -sf -X POST "$SB/rest/v1/autonomous_patterns"               -H "apikey: $KEY" -H "Authorization: Bearer $KEY"               -H "Content-Type: application/json" -H "Prefer: return=minimal"               -d "{"pattern_code":"$code","pattern_name":"$code","pattern_type":"seed","generated_by":"gh_deploy","pattern_data":{"fertile":true}}"               && echo "  ✅ $code" || echo "  ⚠️ $code"
+          done
+          
+          for theme in optimization growth security; do
+            curl -sf -X POST "$SB/rest/v1/mesh_bricks"               -H "apikey: $KEY" -H "Authorization: Bearer $KEY"               -H "Content-Type: application/json" -H "Prefer: return=minimal"               -d "{"network":"ofshore","mode":"Logos","worker":"deploy","subdomain":"holon","content_type":"seed:$theme","content":{"seed":true},"logos_value":"Active","metis_value":"Growing","kairos_value":"Now"}"               && echo "  ✅ brick:$theme" || echo "  ⚠️ brick:$theme"
+          done
+          
+      - name: PRIME harvest
+        run: |
+          W="maciej-koziej01.workers.dev"
+          for i in $(seq 1 20); do
+            curl -sfm 10 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"deploy_$i","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" &
+          done
+          wait
+          echo "PRIME harvested from 20 workers"
