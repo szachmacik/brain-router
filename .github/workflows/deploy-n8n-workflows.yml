@@ -1,0 +1,82 @@
+name: Deploy n8n + Relay
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      N8N_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiYmMyN2JjYy1mZjNkLTRiMzUtODI4ZS0yZTg2NGNmMGVjNjEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiYzU3NTMwOTYtOGI2MS00Y2M4LWE1OGMtZTkyZjM0OTQ3NGJmIiwiaWF0IjoxNzczMDExMTExfQ.mi1l-DWXZ97cVaL-26FaegH0lSR7rdWCzrZACKMgkf4"
+      W: "maciej-koziej01.workers.dev"
+    steps:
+      - name: Create n8n workflows
+        run: |
+          N8N="https://n8n.ofshore.dev/api/v1"
+          
+          # Check existing
+          EXISTING=$(curl -sf "$N8N/workflows" -H "X-N8N-API-KEY: $N8N_KEY" | python3 -c "import sys,json;print(','.join(w['name'] for w in json.load(sys.stdin).get('data',[])))")
+          echo "Existing: $EXISTING"
+          
+          # 1. AI Chat Proxy
+          if echo "$EXISTING" | grep -q "HOLON AI Chat Proxy"; then
+            echo "⏭️ AI Chat Proxy exists"
+          else
+            RESULT=$(curl -sfm 15 -X POST "$N8N/workflows" \
+              -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+              -d '{"name":"HOLON AI Chat Proxy","nodes":[{"parameters":{"httpMethod":"POST","path":"ai-chat","responseMode":"responseNode","options":{}},"type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"id":"wh1","name":"AI Chat Webhook"},{"parameters":{"url":"https://holon-ai.'"$W"'/v1/chat/completions","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify($json.body) }}","options":{"timeout":30000}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[500,300],"id":"hr1","name":"HOLON Gateway"},{"parameters":{"respondWith":"json","responseBody":"={{ JSON.stringify($json) }}","options":{}},"type":"n8n-nodes-base.respondToWebhook","typeVersion":1.1,"position":[750,300],"id":"rw1","name":"Return Response"}],"connections":{"AI Chat Webhook":{"main":[[{"node":"HOLON Gateway","type":"main","index":0}]]},"HOLON Gateway":{"main":[[{"node":"Return Response","type":"main","index":0}]]}},"settings":{"executionOrder":"v1"}}')
+            WF_ID=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+            echo "✅ Created: AI Chat Proxy (id=$WF_ID)"
+            # Activate
+            curl -sfm 10 -X PATCH "$N8N/workflows/$WF_ID" -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" -d '{"active":true}' && echo "   → ACTIVATED" || echo "   → activation pending"
+          fi
+          
+          # 2. Pacemaker Bridge
+          if echo "$EXISTING" | grep -q "HOLON Pacemaker"; then
+            echo "⏭️ Pacemaker exists"
+          else
+            RESULT=$(curl -sfm 15 -X POST "$N8N/workflows" \
+              -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+              -d '{"name":"HOLON Pacemaker Bridge","nodes":[{"parameters":{"rule":{"interval":[{"field":"minutes","minutesInterval":15}]}},"type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[250,300],"id":"st1","name":"Every 15min"},{"parameters":{"url":"https://kairos-os.'"$W"'/session","sendBody":true,"specifyBody":"json","jsonBody":"{\"engine_id\":\"n8n_pacemaker\",\"tokens_in\":600,\"tokens_out\":300,\"ops\":6,\"calls\":3}","options":{"timeout":15000}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[500,300],"id":"hr2","name":"PRIME Harvest"},{"parameters":{"url":"https://holon-ai.'"$W"'/health","options":{"timeout":5000}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[500,500],"id":"hr3","name":"Gateway Health"}],"connections":{"Every 15min":{"main":[[{"node":"PRIME Harvest","type":"main","index":0},{"node":"Gateway Health","type":"main","index":0}]]}},"settings":{"executionOrder":"v1"}}')
+            WF_ID=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+            echo "✅ Created: Pacemaker Bridge (id=$WF_ID)"
+            curl -sfm 10 -X PATCH "$N8N/workflows/$WF_ID" -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" -d '{"active":true}' && echo "   → ACTIVATED"
+          fi
+          
+          # 3. GPT Bridge
+          if echo "$EXISTING" | grep -q "GPT Mesh Bridge"; then
+            echo "⏭️ GPT Bridge exists"
+          else
+            RESULT=$(curl -sfm 15 -X POST "$N8N/workflows" \
+              -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+              -d '{"name":"GPT Mesh Bridge via Gateway","nodes":[{"parameters":{"rule":{"interval":[{"field":"hours","hoursInterval":1}]}},"type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[250,300],"id":"st2","name":"Every hour"},{"parameters":{"url":"https://holon-ai.'"$W"'/v1/chat/completions","sendBody":true,"specifyBody":"json","jsonBody":"{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Generate one insight about distributed AI mesh optimization. Be specific.\"}]}","options":{"timeout":30000}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[500,300],"id":"hr4","name":"GPT via Gateway"}],"connections":{"Every hour":{"main":[[{"node":"GPT via Gateway","type":"main","index":0}]]}},"settings":{"executionOrder":"v1"}}')
+            WF_ID=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+            echo "✅ Created: GPT Bridge (id=$WF_ID)"
+            curl -sfm 10 -X PATCH "$N8N/workflows/$WF_ID" -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" -d '{"active":true}' && echo "   → ACTIVATED"
+          fi
+          
+          # 4. Gemini Bridge
+          if echo "$EXISTING" | grep -q "Gemini Research"; then
+            echo "⏭️ Gemini Bridge exists"
+          else
+            RESULT=$(curl -sfm 15 -X POST "$N8N/workflows" \
+              -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+              -d '{"name":"Gemini Research via Gateway","nodes":[{"parameters":{"rule":{"interval":[{"field":"hours","hoursInterval":2}]}},"type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[250,300],"id":"st3","name":"Every 2h"},{"parameters":{"url":"https://holon-ai.'"$W"'/v1/chat/completions","sendBody":true,"specifyBody":"json","jsonBody":"{\"model\":\"gemini-2.0-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"Research one emerging trend in autonomous AI systems. Be specific.\"}]}","options":{"timeout":30000}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[500,300],"id":"hr5","name":"Gemini via Gateway"}],"connections":{"Every 2h":{"main":[[{"node":"Gemini via Gateway","type":"main","index":0}]]}},"settings":{"executionOrder":"v1"}}')
+            WF_ID=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+            echo "✅ Created: Gemini Bridge (id=$WF_ID)"
+            curl -sfm 10 -X PATCH "$N8N/workflows/$WF_ID" -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" -d '{"active":true}' && echo "   → ACTIVATED"
+          fi
+          
+          # Final count
+          TOTAL=$(curl -sf "$N8N/workflows" -H "X-N8N-API-KEY: $N8N_KEY" | python3 -c "import sys,json;d=json.load(sys.stdin).get('data',[]);print(f'Total: {len(d)} Active: {sum(1 for w in d if w.get("active"))}')")
+          echo "=== $TOTAL ==="
+          
+      - name: Test gateway from real IP
+        run: |
+          echo "Testing gateway..."
+          for model in auto llama-3.3-70b gemini-2.0-flash; do
+            RESULT=$(curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK\"}]}")
+            PROVIDER=$(echo "$RESULT" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('_holon',{}).get('provider','?'),d.get('_holon',{}).get('ms',0),'ms')" 2>/dev/null)
+            echo "  $model → $PROVIDER"
+          done
