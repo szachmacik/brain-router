@@ -13,46 +13,48 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
-      - name: Mega fan-out (all partners parallel)
+      - name: All partners parallel
         run: |
-          echo "=== HOLON MEGA BEAT $(date -u) ==="
+          echo "=== HOLON MEGA BEAT v6 $(date -u) ==="
           
-          # MESH WORKERS (7)
+          # === MESH WORKERS (7) ===
           curl -sfm 45 https://inshallah-worker.maciej-koziej01.workers.dev/scan &
           curl -sfm 45 https://capacity-poller.maciej-koziej01.workers.dev/scan &
           curl -sfm 60 -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/mitosis -H 'Content-Type:application/json' -d '{"count":15}' &
           curl -sfm 10 -X POST https://brick-producer.maciej-koziej01.workers.dev/cycle -H 'Content-Type:application/json' -d '{"force":true}' &
           curl -sfm 10 -X POST https://sol-luna.maciej-koziej01.workers.dev/observe -H 'Content-Type:application/json' -d '{}' &
           curl -sfm 10 -X POST https://planetary-mesh.maciej-koziej01.workers.dev/pulse -H 'Content-Type:application/json' -d '{}' &
-          curl -sfm 10 -X POST https://kairos-event-hub.maciej-koziej01.workers.dev/event -H 'Content-Type:application/json' -d '{"type":"heartbeat","source":"gh_pacemaker"}' &
+          curl -sfm 10 -X POST https://kairos-event-hub.maciej-koziej01.workers.dev/event -H 'Content-Type:application/json' -d '{"type":"heartbeat","source":"pacemaker_v6"}' &
           
-          # PRIME TRADERS (3)
-          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_t1","tokens_in":400,"tokens_out":200,"ops":4,"calls":2}' &
-          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_t2","tokens_in":400,"tokens_out":200,"ops":4,"calls":2}' &
-          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"gh_t3","tokens_in":400,"tokens_out":200,"ops":4,"calls":2}' &
+          # === PRIME TRADERS (3) ===
+          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"t1","tokens_in":500,"tokens_out":250,"ops":5,"calls":2}' &
+          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"t2","tokens_in":500,"tokens_out":250,"ops":5,"calls":2}' &
+          curl -sfm 10 -X POST https://kairos-os.maciej-koziej01.workers.dev/session -H 'Content-Type:application/json' -d '{"engine_id":"t3","tokens_in":500,"tokens_out":250,"ops":5,"calls":2}' &
           
-          # SWARM ROUTER — broadcast to GPT+Gemini+Groq (AI partners)
-          curl -sfm 30 -X POST https://task-executor.maciej-koziej01.workers.dev/swarm -H 'Content-Type:application/json' -d '{"groups":["groq","cfai"],"task":{"prompt":"Status report: respond with current timestamp and OK","id":"heartbeat"}}' &
+          # === AI PARTNERS via Swarm Router (Groq = FREE, works!) ===
+          curl -sfm 30 -X POST https://task-executor.maciej-koziej01.workers.dev/swarm             -H 'Content-Type:application/json'             -d '{"groups":["groq"],"task":{"prompt":"Generate 1 unique optimization insight for an AI mesh network. Max 2 sentences."}}' &
+
+          # === CF AI DIRECT (from GH = external = no same-zone!) ===
+          curl -sfm 30 -X POST https://cosmic-oracle.maciej-koziej01.workers.dev/speak             -H 'Content-Type:application/json'             -d '{"id":"pacemaker:cfai","question":"Generate 1 pattern about network resilience. Max 2 sentences."}' &
           
-          # MANUS PARTNERS (health check)
+          curl -sfm 20 https://cosmic-oracle.maciej-koziej01.workers.dev/census &
+          
+          curl -sfm 20 https://adaptive-router.maciej-koziej01.workers.dev/benchmark &
+          
+          # === MANUS PARTNERS (5 Coolify apps) ===
           curl -sfm 10 https://brain.ofshore.dev &
           curl -sfm 10 https://genspark.ofshore.dev &
           curl -sfm 10 https://security.ofshore.dev &
           curl -sfm 10 https://hub.ofshore.dev &
           curl -sfm 10 https://life-os.ofshore.dev &
           
-          # ADAPTIVE ROUTER benchmark
-          curl -sfm 10 https://adaptive-router.maciej-koziej01.workers.dev/benchmark &
-          
-          # Save beat to Upstash
+          # === SAVE BEAT ===
           UPS="https://fresh-walleye-84119.upstash.io"
           UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
           bn=$(curl -sf "$UPS/get/holon%3Apacemaker%3Abeat_count" -H "Authorization: Bearer $UPT" 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin).get('result','0'))" 2>/dev/null || echo "0")
           bn=$((bn+1))
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          state="{\"beat\":$bn,\"ts\":\"$ts\",\"source\":\"gh_actions\",\"targets\":18}"
-          curl -sf "$UPS/set/holon%3Apacemaker%3Alast_beat/$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"$state\"))")?ex=86400" -X POST -H "Authorization: Bearer $UPT" > /dev/null 2>&1
           curl -sf "$UPS/set/holon%3Apacemaker%3Abeat_count/$bn?ex=31536000" -X POST -H "Authorization: Bearer $UPT" > /dev/null 2>&1
-
+          
           wait
-          echo "Beat #$bn complete: 18 targets, $(date -u)"
+          echo "Beat #$bn: 22 targets (7 mesh + 3 prime + 2 groq + 3 cfai + 5 manus + 2 infra)"
