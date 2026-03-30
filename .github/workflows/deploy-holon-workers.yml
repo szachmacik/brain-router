@@ -1,0 +1,40 @@
+name: Deploy Holon Workers
+
+on:
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: Workers to deploy
+        required: false
+        default: all
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy holon-gateway
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy holon-gateway.js --name holon-gateway --compatibility-date 2024-01-01
+
+      - name: Deploy holon-sim-lab
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy holon-sim-lab.js --name holon-sim-lab --compatibility-date 2024-01-01
+
+      - name: Deploy holon-orchestrator
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy holon-orchestrator.js --name holon-orchestrator --compatibility-date 2024-01-01
+
+      - name: Notify
+        run: |
+          curl -s -X POST https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage             -d chat_id=8149345223             -d text="GitHub+Actions+deploy+done+holon-gateway+holon-sim-lab+holon-orchestrator"
