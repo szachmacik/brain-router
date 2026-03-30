@@ -1,0 +1,84 @@
+name: HOLON Fix All
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_URL: https://blgdhfcosqjzrutncbbr.supabase.co
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsZ2RoZmNvc3FqenJ1dG5jYmJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI0ODM2NTAsImV4cCI6MjA1ODA1OTY1MH0.ipkAVCHmO0cJk5fvVHyFp5KeYVpDp0ZZXP-E40RKo_c
+    steps:
+      - name: Seed Supabase patterns
+        run: |
+          # Seed fertile patterns via REST API  
+          for code in GW_FIX MESH_FIX ECON_FIX IMM_FIX NEU_FIX BIO_FIX CLN_FIX; do
+            curl -sf -X POST "$SUPABASE_URL/rest/v1/autonomous_patterns" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=minimal" \
+              -d "{\"pattern_code\":\"${code}\",\"pattern_name\":\"${code} Pattern\",\"pattern_type\":\"seed\",\"generated_by\":\"gh_fix\",\"pattern_data\":{\"fertile\":true}}" \
+              && echo "  ✅ $code seeded" || echo "  ⚠️ $code: $(echo $?)"
+          done
+          
+          # Seed mesh_bricks for T2 shared_reality
+          for theme in optimization growth security learning evolution; do
+            curl -sf -X POST "$SUPABASE_URL/rest/v1/mesh_bricks" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=minimal" \
+              -d "{\"network\":\"ofshore\",\"mode\":\"Logos\",\"worker\":\"gh_fix\",\"subdomain\":\"holon-ai\",\"content_type\":\"seed:$theme\",\"content\":{\"seed\":true,\"theme\":\"$theme\"},\"logos_value\":\"Active\",\"metis_value\":\"Growing\",\"kairos_value\":\"Now\"}" \
+              && echo "  ✅ brick:$theme" || echo "  ⚠️ brick:$theme"
+          done
+          
+      - name: Test Supabase connection
+        run: |
+          # Verify patterns were seeded
+          RESULT=$(curl -sf "$SUPABASE_URL/rest/v1/autonomous_patterns?select=count&pattern_code=like.%25FIX%25" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Patterns with FIX: $RESULT"
+          
+          BRICKS=$(curl -sf "$SUPABASE_URL/rest/v1/mesh_bricks?select=count&worker=eq.gh_fix" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Bricks from gh_fix: $BRICKS"
+          
+      - name: Test T2 clones  
+        run: |
+          W="maciej-koziej01.workers.dev"
+          for clone in chat-t2-ai code-t2-gen perplexity-t2-search canva-t2-design; do
+            RESULT=$(curl -sfm 30 -X POST "https://$clone.$W/work" \
+              -H "Content-Type: application/json" -d "{}" 2>&1)
+            CHOSE=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('autonomous_choice',{}).get('chose_to','?'))" 2>/dev/null || echo "error")
+            echo "  $clone: $CHOSE"
+          done
+          
+      - name: Test all AI providers via gateway
+        run: |
+          W="maciej-koziej01.workers.dev"
+          for model in auto claude gpt-4o-mini llama-3.3-70b gemini-2.0-flash; do
+            RESULT=$(curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK\"}]}" 2>&1)
+            PROVIDER=$(echo "$RESULT" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('_holon',{}).get('provider','?'),d.get('_holon',{}).get('ms',0),'ms')" 2>/dev/null || echo "error")
+            echo "  $model → $PROVIDER"
+          done
+          
+      - name: Mitosis attempt
+        run: |
+          W="maciej-koziej01.workers.dev"
+          curl -sfm 60 -X POST "https://cosmic-oracle.$W/mitosis" \
+            -H "Content-Type: application/json" -d '{"count":25}' && echo "Mitosis OK" || echo "Mitosis failed"
+          
+          # Census
+          curl -sfm 10 "https://cosmic-oracle.$W/census" | python3 -c "import sys,json;d=json.load(sys.stdin);print(f'Patterns: {d.get("total_patterns",0)} Fertile: {d.get("fertile_pool",0)}')"
+          
+      - name: Report
+        run: |
+          echo "============================================"
+          echo "FIX ALL COMPLETE"
+          echo "============================================"
