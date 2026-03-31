@@ -1,0 +1,43 @@
+name: HOLON Mega Pacemaker
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Full cycle
+        run: |
+          W="maciej-koziej01.workers.dev"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          TYPES=(bee ant spider fungus lizard bacterium firefly tree eagle octopus whale coral butterfly wolf seed)
+          TARGETS=(n8n cloudflare_workers groq_api upstash_redis genspark canva)
+          
+          # 1. Spawn 2 random creatures (staggered)
+          T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1
+          sleep 2
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1 &
+          
+          # 2. Self-learning (random target)
+          TGT=${TARGETS[$RANDOM % ${#TARGETS[@]}]}
+          curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Self-learning bot mastering $TGT. Top 3 tips nobody knows. 200 words."},{"role":"user","content":"Advanced $TGT patterns and hidden features."}]}" > /dev/null 2>&1 &
+          
+          # 3. PRIME harvest (3 sessions)
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"mega_$RANDOM","tokens_in":700,"tokens_out":350,"ops":7,"calls":3}" > /dev/null 2>&1 &
+          done
+          
+          # 4. Mesh build
+          curl -sfm 8 -X POST "https://brick-producer.$W/cycle"             -H "Content-Type: application/json" -d '{"force":true}' > /dev/null 2>&1 &
+          
+          # 5. T2 exercise
+          curl -sfm 12 -X POST "https://chat-t2-ai.$W/work"             -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
+          
+          wait
+          echo "Mega beat: $T1 + $T2 + learn:$TGT $(date -u)"
