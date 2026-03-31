@@ -3,83 +3,32 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-concurrency:
-  group: pacemaker
-  cancel-in-progress: true
 jobs:
-  heartbeat:
+  beat:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 3
     steps:
-      - name: KAIROS beat — full mesh + gateway
-        env:
-          GROQ_KEY: ${{ secrets.GROQ_KEY }}
+      - name: Beat
         run: |
           W="maciej-koziej01.workers.dev"
-          SB="https://blgdhfcosqjzrutncbbr.supabase.co/functions/v1"
-          GW="https://holon-ai.$W"
-          MESH="https://holon-llm-mesh.$W"
           
-          # ═══ GATEWAY — health + route test ═══
-          curl -sfm 8 "$GW/health" &
-          curl -sfm 8 "$GW/v1/models" &
-          curl -sfm 30 -X POST "$GW/v1/chat/completions" -H 'Content-Type:application/json'             -d '{"model":"auto","messages":[{"role":"user","content":"Network pulse check. Status?"}]}' &
-          
-          # ═══ INTERNAL MESH — bots work ═══
-          for bot in chat-t2-ai code-t2-gen perplexity-t2-search canva-t2-design genspark-worker guardian; do
-            curl -sfm 30 -X POST "$MESH/work" -H 'Content-Type:application/json'               -d "{"bot_id":"$bot","task":"Do specialized work for HOLON network"}" &
+          # PRIME (5 sessions, background)
+          for i in 1 2 3 4 5; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session" \
+              -H "Content-Type: application/json" \
+              -d "{\"engine_id\":\"pm_$RANDOM\",\"tokens_in\":600,\"tokens_out\":300,\"ops\":6,\"calls\":3}" > /dev/null 2>&1 &
           done
           
-          # ═══ T2 CLONES ═══
-          for w in chat-t2-ai code-t2-gen perplexity-t2-search canva-t2-design; do
-            curl -sfm 30 -X POST "https://$w.$W/work" -H 'Content-Type:application/json' -d '{}' &
-          done
+          # Bee (1 per beat, staggered)
+          curl -sfm 15 "https://holon-ai.$W/buzz" > /dev/null 2>&1 &
           
-          # ═══ MESH CORE (19) ═══
-          for w in inshallah-worker capacity-poller cosmic-oracle kairos-os task-executor brick-producer sol-luna planetary-mesh adaptive-router kairos-event-hub holon-optimizer holon-feeder holon-pulse holon-synapse kairos-relay kairos-trigger-mesh kairos-worker mephisto mephisto-zbiorczy; do
-            curl -sfm 8 "https://$w.$W/" &
-          done
+          # Mesh build
+          curl -sfm 8 -X POST "https://brick-producer.$W/cycle" \
+            -H "Content-Type: application/json" -d "{\"force\":true}" > /dev/null 2>&1 &
           
-          # ═══ INTELLIGENCE + CLONE + INFRA + SECURITY (19) ═══
-          for w in intelligence-engine pattern-detector wisdom-synthesizer cognitive-mind auto-discovery ecosystem-coordinator fnn-orchestrator knowledge-harvester mitosis-engine clone-analytics mesh-coordinator cost-optimizer resilience-router weather-autonomy-loop mcp-gateway coolify-agent prime-gateway immune-neutrophil bfm-agent; do
-            curl -sfm 8 "https://$w.$W/" &
-          done
-          
-          # ═══ GENSPARK + CLONES (6) ═══
-          for w in genspark-worker genspark-tree-of-knowledge genspark-benchmark slack-clone perplexity-clone linear-clone; do
-            curl -sfm 8 "https://$w.$W/" &
-          done
-          
-          # ═══ FLEET — generate + compare (3) ═══
-          curl -sfm 30 -X POST "https://llm-fleet-builder.$W/hub/generate" -H 'Content-Type:application/json' -d '{"prompt":"Network optimization insight","model_id":"ofshore/llama-3b"}' &
-          curl -sfm 30 -X POST "https://llm-fleet-builder.$W/hub/compare" -H 'Content-Type:application/json' -d '{"prompt":"Best mesh pattern?","model_ids":["ofshore/tinyllama-1b","ofshore/llama-3b"]}' &
-          curl -sfm 15 -X POST "https://llm-fleet-builder.$W/benchmark" -H 'Content-Type:application/json' -d '{}' &
-          
-          # ═══ SUPABASE EF (12) ═══
-          for ef in autonomous-mesh-agent clone-factory pleroma token-harvester guardian-ai-sync nexus-world-relay reality-mirror grover-activate bootstrap-all agent-trigger ai-ping-router squad-orchestrator; do
-            curl -sfm 8 "$SB/$ef" &
-          done
-          
-          # ═══ COOLIFY (20) ═══
-          for u in brain sentinel security hub ai-control-center openmanus genspark kimi-swarm ollama clone life-os fb-ads inbox english-teacher quiz linguaflow kamila zenksiegowosc wp-manager polaris-track; do
-            curl -sfm 8 "https://$u.ofshore.dev" &
-          done
-          
-          # ═══ GROWTH (18) ═══
-          curl -sfm 60 -X POST "https://cosmic-oracle.$W/mitosis" -H 'Content-Type:application/json' -d '{"count":20}' &
-          for i in $(seq 1 15); do
-            curl -sfm 15 -X POST "https://kairos-os.$W/session" -H 'Content-Type:application/json' -d "{"engine_id":"beat_$i","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" &
-          done
-          curl -sfm 10 -X POST "https://brick-producer.$W/cycle" -H 'Content-Type:application/json' -d '{"force":true}' &
-          
-          # ═══ AI RESEARCH via GATEWAY ═══
-          if [ -n "$GROQ_KEY" ]; then
-            curl -sfm 30 -X POST "https://task-executor.$W/swarm" -H 'Content-Type:application/json' -d '{"groups":["groq"],"task":{"prompt":"Network pulse. Patterns? Improvements?"}}' &
-          fi
-          
-          # ═══ VERCEL + PROXY ═══
-          curl -sfm 8 https://manus-autodeploy-test.vercel.app/ &
-          curl -sfm 8 "https://claude-mesh-proxy.$W/status" &
+          # T2
+          curl -sfm 15 -X POST "https://chat-t2-ai.$W/work" \
+            -H "Content-Type: application/json" -d "{}" > /dev/null 2>&1 &
           
           wait
-          echo "Beat: ~125 targets | Gateway+Mesh+Fleet+6bots | 15 PRIME traders | 12 EF | 20 Coolify"
+          echo "Beat complete $(date -u)"
