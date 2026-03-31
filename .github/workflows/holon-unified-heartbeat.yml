@@ -1,37 +1,47 @@
 name: HOLON Unified Heartbeat
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/12 * * * *'
   workflow_dispatch:
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Unified Beat
+      - name: THINK + BUILD + EVOLVE + PRODUCE
         run: |
           W="maciej-koziej01.workers.dev"
-          TYPES=(bee ant spider fungus whale eagle coral butterfly wolf seed parrot crawler chameleon tree octopus)
+          TYPES=(bee ant spider fungus whale eagle coral butterfly wolf seed parrot crawler chameleon tree octopus firefly lizard bacterium)
+          CLONES=(canva crm monitor analytics invoicer chat books)
           
-          # THINK: 2 creatures
-          T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
-          T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
-          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1 &
-          sleep 2
-          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1 &
-          
-          # BUILD: health check 4 endpoints
-          for EP in holon-ai kairos-os cosmic-oracle llm-fleet-builder; do
-            curl -sfm 5 -o /dev/null "https://$EP.$W/health" 2>/dev/null &
-          done
-          
-          # PRIME: 3 sessions
+          # === SPAWN 3 creatures (not 2) ===
           for i in 1 2 3; do
-            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"u_$RANDOM","tokens_in":700,"tokens_out":350,"ops":7,"calls":3}" > /dev/null 2>&1 &
+            T=${TYPES[$RANDOM % ${#TYPES[@]}]}
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=$T" > /dev/null 2>&1 &
+            sleep 1
           done
           
-          # MESH: 1 brick cycle
+          # === EVOLVE random clone (every beat, not */6h!) ===
+          C=${CLONES[$RANDOM % ${#CLONES[@]}]}
+          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Generate 1 NEW feature for holon-$C as JS function. Max 15 lines. ONLY code."},{"role":"user","content":"Evolve holon-$C with a feature the original app doesnt have."}]}" > /dev/null 2>&1 &
+          
+          # === PRODUCE 1 real output ===
+          PRODUCTS=(research code_artifact accounting_entry invoice_template crm_enrichment)
+          P=${PRODUCTS[$RANDOM % ${#PRODUCTS[@]}]}
+          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Produce a useful $P for HOLON network. Max 200 words."},{"role":"user","content":"Generate $P now."}]}" > /dev/null 2>&1 &
+          
+          # === HEALTH CHECK 4 endpoints ===
+          for EP in holon-ai kairos-os cosmic-oracle n8n.ofshore.dev; do
+            curl -sfm 5 -o /dev/null "https://$EP${EP##*.dev}/" 2>/dev/null &
+          done
+          
+          # === PRIME 5 sessions ===
+          for i in 1 2 3 4 5; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"u_$RANDOM","tokens_in":800,"tokens_out":400,"ops":8,"calls":4}" > /dev/null 2>&1 &
+          done
+          
+          # === MESH ===
           curl -sfm 8 -X POST "https://brick-producer.$W/cycle"             -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
           
           wait
-          echo "BEAT $(date -u) $T1+$T2"
+          echo "BEAT+EVO+PROD: $T+$C+$P $(date -u)"
