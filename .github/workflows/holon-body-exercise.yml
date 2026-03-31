@@ -1,0 +1,39 @@
+name: HOLON Body Exercise
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+jobs:
+  exercise:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Exercise body systems
+        run: |
+          W="maciej-koziej01.workers.dev"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          SYSTEMS=(brain heart lungs stomach liver kidneys immune skeleton muscles skin eyes ears reproductive endocrine nervous circulatory memory dna)
+          SYS=${SYSTEMS[$RANDOM % ${#SYSTEMS[@]}]}
+          
+          echo "Exercising: $SYS"
+          
+          # Exercise 1 body system via gateway
+          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"You are the $SYS system of HOLON AI network. Diagnostic report. 200 words."},{"role":"user","content":"Run diagnostic on $SYS system. Report status and recommendations."}]}" > /dev/null 2>&1 &
+          
+          # Spawn 3 random creatures
+          TYPES=(bee ant spider fungus lizard bacterium firefly tree eagle octopus whale coral butterfly wolf seed)
+          for i in 1 2 3; do
+            TYPE=${TYPES[$RANDOM % ${#TYPES[@]}]}
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=$TYPE" > /dev/null 2>&1 &
+            sleep 2
+          done
+          
+          # PRIME harvest
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"body_$RANDOM","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" > /dev/null 2>&1 &
+          done
+          
+          wait
+          echo "Exercise complete $(date -u)"
