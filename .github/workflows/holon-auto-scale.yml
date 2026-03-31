@@ -1,0 +1,42 @@
+name: HOLON Auto-Scale
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Scale All Layers
+        run: |
+          W="maciej-koziej01.workers.dev"
+          echo "LAYER 1: CF Workers (physical)"
+          ALIVE=0
+          for EP in holon-ai kairos-os cosmic-oracle llm-fleet-builder brick-producer sol-luna chat-t2-ai code-t2-gen holon-pulse holon-synapse claude-mesh-proxy holon-llm-mesh planetary-mesh holon-feeder mcp-gateway cognitive-mind; do
+            CODE=$(curl -sfm 5 -o /dev/null -w "%{http_code}" "https://$EP.$W/" 2>/dev/null || echo 0)
+            [ "$CODE" = "200" ] && ALIVE=$((ALIVE+1))
+          done
+          echo "  Physical workers alive: $ALIVE"
+          
+          echo "LAYER 2-4: Virtual Workers via Gateway"
+          # Spawn 20 creatures = 20 virtual workers
+          TYPES=(bee ant spider fungus lizard bacterium firefly tree eagle octopus whale coral butterfly wolf seed crawler chameleon parrot)
+          SPAWNED=0
+          for i in $(seq 1 20); do
+            T=${TYPES[$RANDOM % ${#TYPES[@]}]}
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=$T" > /dev/null 2>&1 && SPAWNED=$((SPAWNED+1))
+            sleep 1
+          done
+          echo "  Creatures spawned: $SPAWNED"
+          
+          echo "LAYER 5: PRIME Economy"
+          for i in $(seq 1 10); do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"scale_$RANDOM","tokens_in":800,"tokens_out":400,"ops":8,"calls":4}" > /dev/null 2>&1 &
+          done
+          wait
+          
+          # Mesh
+          curl -sfm 8 -X POST "https://brick-producer.$W/cycle" -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1
+          
+          echo "SCALE COMPLETE $(date -u)"
