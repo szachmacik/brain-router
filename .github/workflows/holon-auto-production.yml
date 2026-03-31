@@ -1,0 +1,33 @@
+name: HOLON Auto-Production
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Produce
+        run: |
+          W="maciej-koziej01.workers.dev"
+          
+          # Dispatch 5 virtual workers per beat
+          TYPES=(bee ant spider whale eagle coral butterfly wolf parrot crawler)
+          for i in 1 2 3 4 5; do
+            T=${TYPES[$RANDOM % ${#TYPES[@]}]}
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=$T" > /dev/null 2>&1 &
+          done
+          
+          # Produce 2 real outputs per beat
+          PRODUCTS=(research_report code_artifact accounting_entry)
+          P=${PRODUCTS[$RANDOM % ${#PRODUCTS[@]}]}
+          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Produce a useful $P. Max 200 words."},{"role":"user","content":"Generate a $P for the HOLON network."}]}" > /dev/null 2>&1 &
+          
+          # PRIME harvest
+          for i in 1 2 3 4 5; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"prod_$RANDOM","tokens_in":800,"tokens_out":400,"ops":8,"calls":4}" > /dev/null 2>&1 &
+          done
+          
+          wait
+          echo "PRODUCED $(date -u)"
