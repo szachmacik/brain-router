@@ -1,0 +1,49 @@
+name: HOLON Deploy Fruit Workers
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Wrangler
+        run: npm install -g wrangler@latest
+      - name: Deploy Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 9a877cdba770217082a2f914427df505
+        run: |
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="${{ secrets.UPSTASH_TOKEN }}"
+          
+          for NAME in url-shortener json-validator health-dashboard webhook-relay manychat zenksiegowosc; do
+            echo "Deploying holon-$NAME..."
+            
+            # Fetch code from Upstash
+            KEY="holon:fruit:code:$NAME"
+            if [ "$NAME" = "manychat" ] || [ "$NAME" = "zenksiegowosc" ]; then
+              KEY="holon:app:$NAME:code"
+            fi
+            
+            CODE=$(curl -sf -H "Authorization: Bearer $UPT" "$UPS/get/$KEY" | jq -r '.result // empty')
+            
+            if [ -n "$CODE" ] && [ ${#CODE} -gt 50 ]; then
+              mkdir -p /tmp/workers/holon-$NAME
+              echo "$CODE" > /tmp/workers/holon-$NAME/index.mjs
+              cat > /tmp/workers/holon-$NAME/wrangler.toml << TOML
+          name = "holon-$NAME"
+          main = "index.mjs"
+          compatibility_date = "2024-01-01"
+          TOML
+              cd /tmp/workers/holon-$NAME
+              wrangler deploy --name holon-$NAME 2>&1 || echo "FAILED: holon-$NAME"
+              cd -
+            else
+              echo "SKIP: $NAME — no code found"
+            fi
+          done
+          echo "DEPLOY COMPLETE"
