@@ -1,0 +1,49 @@
+name: Pattern Awakener
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  awaken:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Awaken patterns
+        run: |
+          W="maciej-koziej01.workers.dev"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          echo "=== AWAKENER $(date -u) ==="
+          
+          # 1. Read random research from Upstash as seed context
+          KEYS=$(curl -sf "$UPS/keys/holon:research:*" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;ks=json.load(sys.stdin).get('result',[]);import random;print(random.choice(ks) if ks else '')" 2>/dev/null)
+          
+          if [ -n "$KEYS" ]; then
+            CONTEXT=$(curl -sf "$UPS/get/$KEYS" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;v=json.load(sys.stdin).get('result','');print(str(v)[:300])" 2>/dev/null)
+            echo "Seed context from: $KEYS"
+          else
+            CONTEXT="distributed AI mesh network optimization"
+          fi
+          
+          # 2. Spawn creature with seed context
+          curl -sfm 20 "https://holon-ai.$W/spawn?type=bee" > /dev/null 2>&1 &
+          curl -sfm 20 "https://holon-ai.$W/spawn?type=ant" > /dev/null 2>&1 &
+          curl -sfm 20 "https://holon-ai.$W/spawn?type=spider" > /dev/null 2>&1 &
+          
+          # 3. PRIME harvest (5 sessions)
+          for i in 1 2 3 4 5; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session" \
+              -H "Content-Type: application/json" \
+              -d "{"engine_id":"awk_$RANDOM","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" > /dev/null 2>&1 &
+          done
+          
+          # 4. Mesh build
+          curl -sfm 10 -X POST "https://brick-producer.$W/cycle" -H "Content-Type: application/json" -d '{"force":true}' > /dev/null 2>&1 &
+          
+          wait
+          
+          # 5. Stats
+          STATS=$(curl -sfm 5 "https://holon-ai.$W/ecosystem" 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print(f'Creatures:{d.get("total",0)} Value:{d.get("value",0)}')" 2>/dev/null || echo "?")
+          PRIME=$(curl -sfm 5 "https://kairos-os.$W/grid" 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin).get('stats',{});print(f'PRIME:{d.get("total_earned",0)}')" 2>/dev/null || echo "?")
+          echo "$STATS | $PRIME"

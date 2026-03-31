@@ -8,27 +8,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Beat
+      - name: Beat + Creatures + PRIME
         run: |
           W="maciej-koziej01.workers.dev"
           
-          # PRIME (5 sessions, background)
+          # Creatures (staggered — 1 random type per beat)
+          TYPES=(bee ant spider fungus lizard bacterium firefly tree eagle octopus whale coral butterfly wolf seed)
+          TYPE=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$TYPE" > /dev/null 2>&1 &
+          
+          # PRIME (5 sessions)
           for i in 1 2 3 4 5; do
-            curl -sfm 8 -X POST "https://kairos-os.$W/session" \
-              -H "Content-Type: application/json" \
-              -d "{\"engine_id\":\"pm_$RANDOM\",\"tokens_in\":600,\"tokens_out\":300,\"ops\":6,\"calls\":3}" > /dev/null 2>&1 &
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"pm_$RANDOM","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" > /dev/null 2>&1 &
           done
           
-          # Bee (1 per beat, staggered)
-          curl -sfm 15 "https://holon-ai.$W/buzz" > /dev/null 2>&1 &
-          
-          # Mesh build
-          curl -sfm 8 -X POST "https://brick-producer.$W/cycle" \
-            -H "Content-Type: application/json" -d "{\"force\":true}" > /dev/null 2>&1 &
+          # Mesh
+          curl -sfm 8 -X POST "https://brick-producer.$W/cycle"             -H "Content-Type: application/json" -d '{"force":true}' > /dev/null 2>&1 &
           
           # T2
-          curl -sfm 15 -X POST "https://chat-t2-ai.$W/work" \
-            -H "Content-Type: application/json" -d "{}" > /dev/null 2>&1 &
+          curl -sfm 15 -X POST "https://chat-t2-ai.$W/work"             -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
           
           wait
-          echo "Beat complete $(date -u)"
+          echo "Beat $(date -u)"
