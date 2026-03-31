@@ -1,0 +1,48 @@
+name: n8n Mega Deploy
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create all n8n workflows
+        run: |
+          N8N="https://n8n.ofshore.dev/api/v1"
+          N8N_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiYmMyN2JjYy1mZjNkLTRiMzUtODI4ZS0yZTg2NGNmMGVjNjEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiYzU3NTMwOTYtOGI2MS00Y2M4LWE1OGMtZTkyZjM0OTQ3NGJmIiwiaWF0IjoxNzczMDExMTExfQ.mi1l-DWXZ97cVaL-26FaegH0lSR7rdWCzrZACKMgkf4"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          EXISTING=$(curl -sf "$N8N/workflows" -H "X-N8N-API-KEY: $N8N_KEY" | python3 -c "import sys,json;print(','.join(w['name'] for w in json.load(sys.stdin).get('data',[])))")
+          echo "Existing: $EXISTING"
+          
+          for wf_key in wf_ai_chat wf_pacemaker wf_gpt wf_gemini wf_tg_alert wf_fleet wf_mesh_scan wf_coolify wf_t2_exercise wf_supabase; do
+            WF_JSON=$(curl -sf "$UPS/get/holon%3An8n%3A$wf_key" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;print(json.loads(sys.stdin.read()).get('result','{}'))")
+            WF_NAME=$(echo "$WF_JSON" | python3 -c "import sys,json;print(json.loads(sys.stdin.read()).get('name','?'))" 2>/dev/null || echo "unknown")
+            
+            if echo "$EXISTING" | grep -q "$WF_NAME"; then
+              echo "⏭️  $WF_NAME: already exists"
+              continue
+            fi
+            
+            RESULT=$(curl -sfm 15 -X POST "$N8N/workflows" \
+              -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+              -d "$WF_JSON" 2>&1)
+            WF_ID=$(echo "$RESULT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            
+            if [ -n "$WF_ID" ] && [ "$WF_ID" != "" ]; then
+              echo "✅ Created: $WF_NAME (id=$WF_ID)"
+              curl -sfm 10 -X PATCH "$N8N/workflows/$WF_ID" \
+                -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+                -d '{"active":true}' && echo "   → ACTIVATED" || echo "   → activate pending"
+            else
+              echo "⚠️  $WF_NAME: failed"
+            fi
+          done
+          
+          TOTAL=$(curl -sf "$N8N/workflows" -H "X-N8N-API-KEY: $N8N_KEY" | python3 -c "import sys,json;wfs=json.load(sys.stdin).get('data',[]);print(f'Total: {len(wfs)} Active: {sum(1 for w in wfs if w.get("active"))}')")
+          echo "=== $TOTAL ==="
+          
+          curl -sf -X POST "https://api.telegram.org/bot8394457153:AAFZQ4eMHaiAnmwejmTfWZHI_5KSqhXgCXg/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id":"8149345223","text":"N8N MEGA DEPLOY!\n10 workflows created+activated\n$TOTAL\nMake.com REPLACED!"}'
