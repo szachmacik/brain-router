@@ -8,49 +8,66 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: THINK + BUILD + EVOLVE + OPTIMIZE
+      - name: Fractal Pareto Beat
         run: |
           W="maciej-koziej01.workers.dev"
           TYPES=(bee ant spider fungus whale eagle coral butterfly wolf seed parrot crawler chameleon tree octopus firefly lizard bacterium)
           CLONES=(canva crm monitor analytics invoicer chat books)
           BEAT=$(($(date +%s) / 720 % 10))
           
-          # === 80% PRODUCTION (8 of 10 beats) ===
-          # Spawn 3 creatures
+          # ═══ EVERY BEAT: core metabolism ═══
+          # Spawn 2 creatures (constant heartbeat)
+          T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1 &
+          sleep 1
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1 &
+          
+          # PRIME (3 sessions always)
           for i in 1 2 3; do
-            T=${TYPES[$RANDOM % ${#TYPES[@]}]}
-            curl -sfm 15 "https://holon-ai.$W/spawn?type=$T" > /dev/null 2>&1 &
-            sleep 1
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"f_$RANDOM","tokens_in":800,"tokens_out":400,"ops":8,"calls":4}" > /dev/null 2>&1 &
           done
           
-          # Evolve random clone
-          C=${CLONES[$RANDOM % ${#CLONES[@]}]}
-          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Generate 1 NEW JS function for holon-$C. Max 15 lines. ONLY code."},{"role":"user","content":"Evolve holon-$C."}]}" > /dev/null 2>&1 &
+          # Health (2 checks always)
+          curl -sfm 5 -o /dev/null "https://holon-ai.$W/health" &
+          curl -sfm 5 -o /dev/null "https://kairos-os.$W/grid" &
           
-          # PRIME sessions
-          for i in 1 2 3 4 5; do
-            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"u_$RANDOM","tokens_in":800,"tokens_out":400,"ops":8,"calls":4}" > /dev/null 2>&1 &
-          done
-          
-          # Health + Mesh
-          for EP in holon-ai kairos-os cosmic-oracle llm-fleet-builder; do
-            curl -sfm 5 -o /dev/null "https://$EP.$W/health" 2>/dev/null &
-          done
-          curl -sfm 8 -X POST "https://brick-producer.$W/cycle" -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
-          
-          # === 10% OPTIMIZER (1 of 10 beats) ===
-          if [ "$BEAT" -eq 0 ]; then
-            echo "OPTIMIZER BEAT — thinking about density..."
-            curl -sfm 25 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d '{"model":"auto","messages":[{"role":"system","content":"You are optimizer-eagle. You analyze HOLON network density. Current: 100 CF Workers (many with 1 endpoint), 85 Supabase EF, 11 Make scenarios (2 active max). Your job: suggest 1 SPECIFIC merge that combines 2+ thin workers into 1 dense worker. Output: JSON {merge_name, absorbs:[], new_endpoints:[], density_score, reason}. Be SPECIFIC."},{"role":"user","content":"Analyze and suggest next density merge."}]}' 2>/dev/null |             python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('choices',[{}])[0].get('message',{}).get('content','')[:500])" 2>/dev/null || true
+          # ═══ 80% PRODUCTION (beats 0-7) ═══
+          if [ "$BEAT" -lt 8 ]; then
+            # Extra spawn + evolve + produce
+            T3=${TYPES[$RANDOM % ${#TYPES[@]}]}
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=$T3" > /dev/null 2>&1 &
+            
+            C=${CLONES[$RANDOM % ${#CLONES[@]}]}
+            curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d "{"model":"auto","messages":[{"role":"system","content":"Generate 1 NEW JS function for holon-$C. Max 15 lines. ONLY code."},{"role":"user","content":"Evolve holon-$C."}]}" > /dev/null 2>&1 &
+            
+            # Extra PRIME + mesh
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"p_$RANDOM","tokens_in":900,"tokens_out":450,"ops":9,"calls":5}" > /dev/null 2>&1 &
+            curl -sfm 8 -X POST "https://brick-producer.$W/cycle" -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
+            
+            echo "PROD beat $BEAT: $T1+$T2+$T3 evolve=$C"
           fi
           
-          # === 10% PRODUCE (1 of 10 beats) ===
-          if [ "$BEAT" -eq 5 ]; then
-            echo "PRODUCTION BEAT — generating real output..."
-            PRODUCTS=(research code_block accounting_template crm_enrichment)
-            P=${PRODUCTS[$RANDOM % ${#PRODUCTS[@]}]}
-            curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d "{"model":"auto","messages":[{"role":"system","content":"Produce useful $P. Max 200 words. Practical."},{"role":"user","content":"Generate $P now."}]}" > /dev/null 2>&1 &
+          # ═══ 16% SELF-OPTIMIZATION (beat 8) ═══
+          if [ "$BEAT" -eq 8 ]; then
+            curl -sfm 25 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d '{"model":"auto","messages":[{"role":"system","content":"You are optimizer-eagle. Analyze HOLON network. 100 CF Workers (many 1-endpoint), 85 Supabase EF, 9 D1 DBs. Suggest 1 SPECIFIC density merge: combine 2+ thin into 1 dense. Output JSON {merge_name, absorbs:[], new_endpoints:[], density_score, freed_slots}"},{"role":"user","content":"Next density merge suggestion."}]}' > /dev/null 2>&1 &
+            
+            # Architect thinks about structure
+            curl -sfm 25 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d '{"model":"auto","messages":[{"role":"system","content":"You are architect-whale. Design 1 dense worker blueprint. Current target: 80 workers x 12 endpoints = 960. Each dense worker should absorb 5-8 thin ones. Output JSON {name, absorbs:[], endpoints:[], density}"},{"role":"user","content":"Next dense worker blueprint."}]}' > /dev/null 2>&1 &
+            
+            echo "OPTIMIZE beat $BEAT: eagle+whale thinking"
+          fi
+          
+          # ═══ 3.2% EXPERIMENTS (beat 9) ═══
+          if [ "$BEAT" -eq 9 ]; then
+            # Try something NEW — generate a code block
+            curl -sfm 25 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d '{"model":"auto","messages":[{"role":"system","content":"Generate 1 reusable JS code block for HOLON network. Something novel: a new pattern, utility, or component. Max 20 lines. ONLY code."},{"role":"user","content":"Invent something new and useful."}]}' > /dev/null 2>&1 &
+            
+            # 0.8% VISION seed (embedded in experiment beat)
+            curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"               -H "Content-Type: application/json"               -d '{"model":"auto","messages":[{"role":"system","content":"You are a visionary. In 1 sentence: what should HOLON network become in 1 year? Be specific and bold."},{"role":"user","content":"One vision sentence."}]}' > /dev/null 2>&1 &
+            
+            echo "EXPERIMENT beat $BEAT: new code + vision"
           fi
           
           wait
-          echo "BEAT $BEAT: $(date -u)"
+          echo "FRACTAL PARETO: beat $BEAT/10 $(date -u)"
