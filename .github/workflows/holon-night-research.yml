@@ -8,20 +8,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Fleet research
+      - name: Bee swarm research
         run: |
           W="maciej-koziej01.workers.dev"
-          TOPICS=("distributed consensus for AI mesh" "zero-knowledge proofs for API key verification" "biological immune system patterns for network defense" "edge computing cost optimization strategies" "WebAssembly for portable AI inference")
-          IDX=$((RANDOM % 5))
-          TOPIC="${TOPICS[$IDX]}"
           
-          echo "Researching: $TOPIC"
-          RESULT=$(curl -sfm 60 -X POST "https://llm-fleet-builder.$W/hub/generate"             -H "Content-Type: application/json"             -d "{"prompt":"$TOPIC. Be specific with implementation details.","model_id":"ofshore/llama-8b"}")
-          echo "$RESULT" | head -c 300
+          # Launch 10 bees (each uses CF AI free)
+          echo "Launching 10 research bees..."
+          RESULT=$(curl -sfm 60 "https://pattern-hive.$W/swarm?n=10")
+          echo "$RESULT" | python3 -c "
+          import sys,json
+          try:
+            d=json.load(sys.stdin)
+            print(f'Bees: {d.get("bees_succeeded",0)}/{d.get("bees_launched",0)}')
+            print(f'Chars: {d.get("total_chars",0)}')
+            print(f'Children: {d.get("children_spawned",0)}')
+          except: print('Parse error')
+          " 2>/dev/null || echo "Failed"
           
-          # Save to Upstash
-          UPS="https://fresh-walleye-84119.upstash.io"
-          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
-          TIMESTAMP=$(date +%s)
-          KEY="holon:night_research:$TIMESTAMP"
-          curl -sf -X POST "$UPS/set/$KEY?ex=604800"             -H "Authorization: Bearer $UPT"             -H "Content-Type: application/json"             -d "$(echo "$RESULT" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))')"
+          # Also do Fleet research
+          curl -sfm 60 -X POST "https://llm-fleet-builder.$W/hub/generate"             -H "Content-Type: application/json"             -d "{"prompt":"Generate one novel optimization for autonomous AI mesh networks. Be specific.","model_id":"ofshore/llama-8b"}" || true
