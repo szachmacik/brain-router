@@ -8,40 +8,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
-      - name: Full ecosystem + environment learning
+      - name: Full stack learning cycle
         run: |
           W="maciej-koziej01.workers.dev"
           
-          # 18 species
           TYPES=(bee ant spider fungus lizard bacterium firefly tree eagle octopus whale coral butterfly wolf seed crawler chameleon parrot)
-          # 10 learning targets
           TARGETS=(n8n cloudflare_workers groq_api upstash_redis genspark canva vercel supabase figma notion)
-          # 12 environments
-          ENVS=(cf_worker docker_container upstash_redis d1_sqlite supabase_edge github_actions n8n_workflow browser_headless groq_llm gemini_api vercel_edge telegram_bot)
+          LAYERS=(L1_hardware L2_os_runtime L3_network L4_data L5_application L6_ai_inference L7_presentation)
           
           T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
           T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
           TGT=${TARGETS[$RANDOM % ${#TARGETS[@]}]}
-          ENV=${ENVS[$RANDOM % ${#ENVS[@]}]}
+          LYR=${LAYERS[$RANDOM % ${#LAYERS[@]}]}
           
-          # 1. Spawn 2 creatures
+          # Spawn 2 creatures
           curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1
           sleep 2
           curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1 &
           
-          # 2. Self-learning (app mastery)
-          curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Learn $TGT. Top 3 advanced tips. 200 words."},{"role":"user","content":"Advanced $TGT patterns most miss."}]}" > /dev/null 2>&1 &
+          # App learning
+          curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Learn $TGT. Top 3 tips. 200w."},{"role":"user","content":"Advanced $TGT patterns."}]}" > /dev/null 2>&1 &
           
-          # 3. Environment optimization (env mastery)
-          curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Optimize $ENV environment. 3 tricks. 150 words."},{"role":"user","content":"How to maximize output in $ENV within free tier limits?"}]}" > /dev/null 2>&1 &
+          # Stack layer optimization
+          curl -sfm 15 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Optimize $LYR layer. 3 tricks. 150w."},{"role":"user","content":"How to maximize $LYR within free tier?"}]}" > /dev/null 2>&1 &
           
-          # 4. PRIME harvest (5 sessions)
+          # PRIME (5 sessions)
           for i in 1 2 3 4 5; do
             curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"m_$RANDOM","tokens_in":700,"tokens_out":350,"ops":7,"calls":3}" > /dev/null 2>&1 &
           done
           
-          # 5. Mesh
+          # Mesh
           curl -sfm 8 -X POST "https://brick-producer.$W/cycle"             -H "Content-Type: application/json" -d '{"force":true}' > /dev/null 2>&1 &
           
           wait
-          echo "$T1+$T2 learn:$TGT env:$ENV $(date -u)"
+          echo "$T1+$T2 app:$TGT layer:$LYR $(date -u)"
