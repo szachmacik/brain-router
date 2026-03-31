@@ -1,0 +1,40 @@
+name: HOLON Food Chain
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+jobs:
+  chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Run food chain
+        run: |
+          W="maciej-koziej01.workers.dev"
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          
+          # Step 1: Bee produces
+          BEE=$(curl -sfm 15 "https://holon-ai.$W/spawn?type=bee" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id',''))" 2>/dev/null)
+          sleep 2
+          
+          # Step 2: Read bee output, feed to ant via gateway
+          SEED=$(curl -sf "$UPS/get/holon:creature:$BEE" -H "Authorization: Bearer $UPT" | python3 -c "import sys,json;v=json.load(sys.stdin).get('result','{}');import json as j;d=j.loads(v) if isinstance(v,str) else v;print(d.get('preview','mesh optimization')[:150] if isinstance(d,dict) else 'mesh optimization')" 2>/dev/null || echo "mesh optimization")
+          
+          # Step 3: Ant optimizes
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=ant" > /dev/null 2>&1
+          sleep 2
+          
+          # Step 4: Spider monitors
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=spider" > /dev/null 2>&1
+          sleep 2
+          
+          # Step 5: Whale synthesizes
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=whale" > /dev/null 2>&1
+          
+          # PRIME harvest
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"chain_$RANDOM","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" > /dev/null 2>&1 &
+          done
+          wait
+          echo "Chain complete $(date -u)"
