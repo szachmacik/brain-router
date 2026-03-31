@@ -1,0 +1,11 @@
+name: n8n Deploy (Python)
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy n8n workflows
+        run: python3 scripts/deploy_n8n.py
