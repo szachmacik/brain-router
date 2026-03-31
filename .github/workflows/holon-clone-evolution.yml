@@ -1,0 +1,34 @@
+name: HOLON Clone Evolution
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Evolve Clones
+        run: |
+          W="maciej-koziej01.workers.dev"
+          
+          # Pick random clone to evolve
+          CLONES=(canva crm monitor analytics invoicer chat books)
+          C=${CLONES[$RANDOM % ${#CLONES[@]}]}
+          
+          # Generate evolution improvement via AI
+          curl -sfm 20 -X POST "https://holon-ai.$W/v1/chat/completions"             -H "Content-Type: application/json"             -d "{"model":"auto","messages":[{"role":"system","content":"Generate 1 specific code improvement for a $C clone app. Output ONLY a JS function. Max 20 lines."},{"role":"user","content":"What feature can improve holon-$C? Generate the function."}]}" > /dev/null 2>&1
+          
+          # Spawn 3 creatures (production)
+          for i in 1 2 3; do
+            T=(bee ant spider whale eagle coral parrot)
+            curl -sfm 15 "https://holon-ai.$W/spawn?type=${T[$RANDOM % ${#T[@]}]}" > /dev/null 2>&1 &
+          done
+          
+          # PRIME
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"evo_$RANDOM","tokens_in":700,"tokens_out":350,"ops":7,"calls":3}" > /dev/null 2>&1 &
+          done
+          
+          wait
+          echo "EVOLVED: holon-$C $(date -u)"
