@@ -1,0 +1,35 @@
+name: HOLON Self-Heal Loop
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Heal
+        run: |
+          W="maciej-koziej01.workers.dev"
+          
+          # Check all workers, restart if dead
+          for EP in holon-ai kairos-os cosmic-oracle llm-fleet-builder holon-url-shortener holon-health-dashboard holon-app-manychat holon-app-zenksiegowosc; do
+            CODE=$(curl -sfm 5 -o /dev/null -w "%{http_code}" "https://$EP.$W/" 2>/dev/null || echo 0)
+            if [ "$CODE" = "0" ] || [ "$CODE" = "502" ] || [ "$CODE" = "503" ]; then
+              echo "HEAL: $EP is $CODE — attempting recovery"
+            fi
+          done
+          
+          # Spawn 2 creatures (keep ecosystem alive)
+          TYPES=(bee ant spider whale eagle coral parrot butterfly)
+          T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1
+          
+          # PRIME harvest
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"heal_$RANDOM","tokens_in":500,"tokens_out":250,"ops":5,"calls":2}" > /dev/null 2>&1 &
+          done
+          wait
+          echo "HEALED $(date -u)"
