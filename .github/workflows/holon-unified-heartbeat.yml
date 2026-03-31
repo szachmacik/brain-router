@@ -1,0 +1,37 @@
+name: HOLON Unified Heartbeat
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Unified Beat
+        run: |
+          W="maciej-koziej01.workers.dev"
+          TYPES=(bee ant spider fungus whale eagle coral butterfly wolf seed parrot crawler chameleon tree octopus)
+          
+          # THINK: 2 creatures
+          T1=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          T2=${TYPES[$RANDOM % ${#TYPES[@]}]}
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T1" > /dev/null 2>&1 &
+          sleep 2
+          curl -sfm 15 "https://holon-ai.$W/spawn?type=$T2" > /dev/null 2>&1 &
+          
+          # BUILD: health check 4 endpoints
+          for EP in holon-ai kairos-os cosmic-oracle llm-fleet-builder; do
+            curl -sfm 5 -o /dev/null "https://$EP.$W/health" 2>/dev/null &
+          done
+          
+          # PRIME: 3 sessions
+          for i in 1 2 3; do
+            curl -sfm 8 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"u_$RANDOM","tokens_in":700,"tokens_out":350,"ops":7,"calls":3}" > /dev/null 2>&1 &
+          done
+          
+          # MESH: 1 brick cycle
+          curl -sfm 8 -X POST "https://brick-producer.$W/cycle"             -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1 &
+          
+          wait
+          echo "BEAT $(date -u) $T1+$T2"
