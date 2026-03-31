@@ -1,0 +1,65 @@
+name: Deploy Apps API
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Deploy holon-apps-api worker
+        run: |
+          ACCT="9a877cdba770217082a2f914427df505"
+          CF_TOKEN="cfut_mdWHMCvEf6WNE21C4twUOIglMLCHnY084omrjW4w9850b06c"
+          W="maciej-koziej01.workers.dev"
+          
+          cat > /tmp/worker.js << 'WORKEREOF'
+          const UPS='https://fresh-walleye-84119.upstash.io';
+          const UPT= + UPT + ;
+          const GW='https://holon-ai.maciej-koziej01.workers.dev/v1/chat/completions';
+          const CH={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'*','Access-Control-Allow-Headers':'*','Content-Type':'application/json'};
+          const J=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:CH});
+          async function uGet(k){try{const r=await fetch(UPS+'/get/'+encodeURIComponent(k),{headers:{Authorization:'Bearer '+UPT}}).then(r=>r.json());try{return r.result?JSON.parse(r.result):r.result}catch{return r.result}}catch{return null}}
+          
+          const APPS={zenksiegowosc:'ZenKsięgowość','english-teacher':'English Teacher',quiz:'AYS Quiz Manager','fb-ads':'Meta Ads Manager','life-os':'Life OS / BioPulse',inbox:'Inbox',linguaflow:'LinguaFlow',kamila:'Kamila',sentinel:'Sentinel','ai-control-center':'AI Control Center',brain:'Brain Router',hub:'Automation Hub','kimi-swarm':'Kimi Swarm','polaris-track':'Polaris Track','wp-manager':'WP Manager'};
+          
+          export default{async fetch(req,env,ctx){
+            if(req.method==='OPTIONS')return new Response(null,{headers:CH});
+            const u=new URL(req.url);const p=u.pathname;
+            if(p==='/api/apps')return J({apps:Object.entries(APPS).map(([id,name])=>({id,name}))});
+            if(p==='/api/chat'&&req.method==='POST'){
+              const{app_id='default',message='',messages=[],model='auto'}=await req.json().catch(()=>({}));
+              const sys=await uGet('holon:app_context:'+app_id)||'Jestem HOLON AI. Jak mogę pomóc?';
+              const msgs=[{role:'system',content:sys},...(messages.length?messages:[{role:'user',content:message||'Cześć'}])];
+              try{const r=await fetch(GW,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,messages:msgs}),signal:AbortSignal.timeout(30000)});return J({...(await r.json()),_app:{id:app_id,name:APPS[app_id]||'HOLON AI'}})}
+              catch(e){return J({error:String(e)},500)}
+            }
+            if(p==='/health')return J({ok:true,v:1,apps:Object.keys(APPS).length});
+            return J({service:'holon-apps-api',apps:Object.keys(APPS).length,endpoints:['/api/apps','/api/chat','/health']});
+          }};
+          WORKEREOF
+          
+          # Deploy via CF API
+          BOUNDARY="xB"
+          METADATA='{"main_module":"worker.js","bindings":[],"compatibility_date":"2024-01-01","compatibility_flags":["nodejs_compat"]}'
+          
+          BODY=$(printf -- "--%s
+Content-Disposition: form-data; name="worker.js"; filename="worker.js"
+Content-Type: application/javascript+module
+
+%s
+--%s
+Content-Disposition: form-data; name="metadata"; filename="metadata.json"
+Content-Type: application/json
+
+%s
+--%s--" "$BOUNDARY" "$(cat /tmp/worker.js)" "$BOUNDARY" "$METADATA" "$BOUNDARY")
+          
+          RESULT=$(curl -sfm 30 -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCT/workers/scripts/holon-apps-api"             -H "Authorization: Bearer $CF_TOKEN"             -H "Content-Type: multipart/form-data; boundary=$BOUNDARY"             --data-binary "$BODY")
+          echo "Deploy: $RESULT" | head -c 200
+          
+          # Enable subdomain
+          curl -sfm 10 -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCT/workers/scripts/holon-apps-api/subdomain"             -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" -d '{"enabled":true}'
+          
+          # Verify
+          sleep 3
+          curl -sfm 5 "https://holon-apps-api.$W/health" && echo "✅ LIVE!" || echo "⚠️ Not responding yet"
