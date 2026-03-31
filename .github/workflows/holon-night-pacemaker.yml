@@ -1,0 +1,38 @@
+name: HOLON Night Pacemaker
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Heartbeat
+        run: |
+          W="maciej-koziej01.workers.dev"
+          echo "=== HOLON HEARTBEAT $(date -u) ==="
+          
+          # PRIME harvest (5 sessions per beat)
+          for i in 1 2 3 4 5; do
+            curl -sfm 10 -X POST "https://kairos-os.$W/session"               -H "Content-Type: application/json"               -d "{"engine_id":"night_$i","tokens_in":600,"tokens_out":300,"ops":6,"calls":3}" &
+          done
+          wait
+          
+          # Mesh build
+          curl -sfm 10 -X POST "https://brick-producer.$W/cycle" -H "Content-Type: application/json" -d '{"force":true}' &
+          curl -sfm 10 -X POST "https://sol-luna.$W/observe" -H "Content-Type: application/json" -d '{"force":true}' &
+          wait
+          
+          # T2 work
+          curl -sfm 15 -X POST "https://chat-t2-ai.$W/work" -H "Content-Type: application/json" -d '{}' &
+          curl -sfm 15 -X POST "https://code-t2-gen.$W/work" -H "Content-Type: application/json" -d '{}' &
+          wait
+          
+          # Health check
+          GW=$(curl -sfm 5 "https://holon-ai.$W/health")
+          echo "Gateway: $GW"
+          
+          # Stats
+          GRID=$(curl -sfm 10 "https://kairos-os.$W/grid")
+          echo "Grid: $GRID" | head -c 200

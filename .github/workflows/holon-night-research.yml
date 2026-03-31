@@ -1,0 +1,27 @@
+name: HOLON Night Research
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Fleet research
+        run: |
+          W="maciej-koziej01.workers.dev"
+          TOPICS=("distributed consensus for AI mesh" "zero-knowledge proofs for API key verification" "biological immune system patterns for network defense" "edge computing cost optimization strategies" "WebAssembly for portable AI inference")
+          IDX=$((RANDOM % 5))
+          TOPIC="${TOPICS[$IDX]}"
+          
+          echo "Researching: $TOPIC"
+          RESULT=$(curl -sfm 60 -X POST "https://llm-fleet-builder.$W/hub/generate"             -H "Content-Type: application/json"             -d "{"prompt":"$TOPIC. Be specific with implementation details.","model_id":"ofshore/llama-8b"}")
+          echo "$RESULT" | head -c 300
+          
+          # Save to Upstash
+          UPS="https://fresh-walleye-84119.upstash.io"
+          UPT="gQAAAAAAAUiXAAIncDEwMjljNTI2ZGQ5OWQ0OGJlOTFmYWU2YjQ2OGI0NmIyZXAxODQxMTk"
+          TIMESTAMP=$(date +%s)
+          KEY="holon:night_research:$TIMESTAMP"
+          curl -sf -X POST "$UPS/set/$KEY?ex=604800"             -H "Authorization: Bearer $UPT"             -H "Content-Type: application/json"             -d "$(echo "$RESULT" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))')"
