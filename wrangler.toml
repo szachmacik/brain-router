@@ -1,20 +1,19 @@
+# brain-router wrangler.toml
 name = "brain-router"
 main = "worker.js"
-compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_date = "2024-01-01"
 
+# D1 Bindings
 [[d1_databases]]
 binding = "KB_META"
 database_name = "kb-metadata"
-database_id = "1f507f5c-11ec-4786-a906-6737554c0fbc"
+database_id = "1f507f5c-e9f8-4e22-99eb-a4e9a95a5e58"
 
+[[d1_databases]]
+binding = "AGENT_STATE"
+database_name = "agent-state"
+database_id = "4c67a2b1-6830-44ec-97b1-7c8f93722add"
+
+# Environment Variables
 [vars]
-ROUTER_PUBLIC = "false"
-
-# CF Secrets (nigdy w git, nigdy w logach):
-# wrangler secret put ANTHROPIC_API_KEY
-# wrangler secret put ROUTER_SECRET
-# wrangler secret put SUPABASE_URL
-# wrangler secret put SUPABASE_ANON_KEY
-# wrangler secret put SUPABASE_SERVICE_KEY
-# wrangler secret put OLLAMA_URL
+ROUTER_SECRET = "holon-mesh-router-2026"
