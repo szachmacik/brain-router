@@ -1,0 +1,57 @@
+name: Deploy Morficzne Pole
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'worker.js'
+      - 'wrangler.toml'
+      - '.github/workflows/deploy-morficzne-pole.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to Cloudflare
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Verify wrangler.toml exists
+        run: |
+          if [ ! -f "wrangler.toml" ]; then
+            echo "❌ wrangler.toml not found!"
+            exit 1
+          fi
+          echo "✅ wrangler.toml found"
+          cat wrangler.toml
+      
+      - name: Verify worker file exists
+        run: |
+          if [ ! -f "worker.js" ]; then
+            echo "❌ worker.js not found!"
+            exit 1
+          fi
+          echo "✅ worker.js found"
+      
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+      
+      - name: Verify deployment
+        run: |
+          echo "🌊 Deployment complete!"
+          echo "Check logs: https://dash.cloudflare.com"
+          
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ Morficzne pole deployed successfully"
+          
+      - name: Notify on failure  
+        if: failure()
+        run: |
+          echo "❌ Deployment failed - check workflow logs"
