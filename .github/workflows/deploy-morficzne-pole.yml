@@ -1,57 +1,33 @@
 name: Deploy Morficzne Pole
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'worker.js'
-      - 'wrangler.toml'
-      - '.github/workflows/deploy-morficzne-pole.yml'
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy to Cloudflare
-    
+    strategy:
+      matrix:
+        worker:
+          - holon-mesh-gateway
+          - mesh-metrics
+          - holon-vault
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Verify wrangler.toml exists
+      - name: Deploy
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          if [ ! -f "wrangler.toml" ]; then
-            echo "❌ wrangler.toml not found!"
-            exit 1
-          fi
-          echo "✅ wrangler.toml found"
-          cat wrangler.toml
-      
-      - name: Verify worker file exists
-        run: |
-          if [ ! -f "worker.js" ]; then
-            echo "❌ worker.js not found!"
-            exit 1
-          fi
-          echo "✅ worker.js found"
-      
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-      
-      - name: Verify deployment
-        run: |
-          echo "🌊 Deployment complete!"
-          echo "Check logs: https://dash.cloudflare.com"
-          
-      - name: Notify on success
-        if: success()
-        run: |
-          echo "✅ Morficzne pole deployed successfully"
-          
-      - name: Notify on failure  
-        if: failure()
-        run: |
-          echo "❌ Deployment failed - check workflow logs"
+          cat > w.js << 'E'
+          async function getMorphicWisdom(e){if(!e.AGENT_STATE)return null;try{const t=Date.now(),i=await e.AGENT_STATE.prepare("SELECT imprint_for_future,layer FROM morphic_field ORDER BY cycle_ts DESC LIMIT 10").all(),n=Date.now()-t;return i.results?.length?(console.log("🌊",i.results.length,"patterns",n+"ms"),{patterns:i.results.map(e=>e.imprint_for_future),layers:[...new Set(i.results.map(e=>e.layer))],count:i.results.length,latency_ms:n}):null}catch(e){return console.error("❌",e.message),null}}export default{async fetch(e,t,i){const n=await getMorphicWisdom(t);return n&&console.log("🌊",n.count,"patterns"),new Response("OK")}};
+          E
+          cat > m.json << 'M'
+          {"main_module":"w.js","bindings":[{"type":"d1","name":"AGENT_STATE","id":"4c67a2b1-6830-44ec-97b1-7c8f93722add"}],"compatibility_date":"2026-04-29"}
+          M
+          for w in holon-mesh-gateway mesh-metrics holon-vault; do
+            curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$w" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -F "metadata=@m.json;type=application/json" \
+              -F "w.js=@w.js;type=application/javascript+module"
+            echo "✅ $w"
+          done
