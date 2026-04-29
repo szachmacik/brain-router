@@ -511,6 +511,40 @@ const CORS = {
 };
 const json = (data, status=200) => Response.json(data, { status, headers: CORS });
 
+
+// === MORFICZNE POLE INTEGRATION ===
+async function getMorphicWisdom(env) {
+  if (!env.AGENT_STATE) {
+    console.warn('AGENT_STATE D1 not bound - morficzne pole unavailable');
+    return null;
+  }
+  
+  try {
+    const imprints = await env.AGENT_STATE.prepare(
+      `SELECT imprint_for_future, layer, relevance_score 
+       FROM morphic_field 
+       WHERE relevance_score > 0.5
+       ORDER BY cycle_ts DESC 
+       LIMIT 10`
+    ).all();
+    
+    if (!imprints.results || imprints.results.length === 0) {
+      return null;
+    }
+    
+    // Return compressed wisdom (fractal compression)
+    return {
+      patterns: imprints.results.map(i => i.imprint_for_future),
+      layers: [...new Set(imprints.results.map(i => i.layer))],
+      count: imprints.results.length,
+      compressed: true
+    };
+  } catch (e) {
+    console.error('Morficzne pole query failed:', e.message);
+    return null;
+  }
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
