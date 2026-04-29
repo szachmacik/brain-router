@@ -1,5 +1,7 @@
 // HOLON-META: {
 //   purpose: "AI request router - 4-tier cost optimization (Ollama->Groq->Sonnet->Opus)",
+//   morphic_field: "agent-state:4c67a2b1-6830-44ec-97b1-7c8f93722add",
+//   startup_protocol: "READ morphic_field + biofield_external + em_grid BEFORE execution",
 //   used_by: ["ai-control-center", "mesh-executor", "autonomous-repair", "manus-brain"],
 //   related: ["infra-router", "vault.ofshore.dev/get", "kb-metadata D1"],
 //   rules: [
