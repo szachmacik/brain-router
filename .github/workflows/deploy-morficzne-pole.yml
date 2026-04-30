@@ -1,4 +1,4 @@
-name: Deploy Morficzne Pole
+name: Deploy Morficzne Pole with Wrangler
 
 on:
   workflow_dispatch:
@@ -6,28 +6,70 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        worker:
-          - holon-mesh-gateway
-          - mesh-metrics
-          - holon-vault
+    
     steps:
-      - name: Deploy
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      - name: Deploy Workers
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          cat > w.js << 'E'
-          async function getMorphicWisdom(e){if(!e.AGENT_STATE)return null;try{const t=Date.now(),i=await e.AGENT_STATE.prepare("SELECT imprint_for_future,layer FROM morphic_field ORDER BY cycle_ts DESC LIMIT 10").all(),n=Date.now()-t;return i.results?.length?(console.log("🌊",i.results.length,"patterns",n+"ms"),{patterns:i.results.map(e=>e.imprint_for_future),layers:[...new Set(i.results.map(e=>e.layer))],count:i.results.length,latency_ms:n}):null}catch(e){return console.error("❌",e.message),null}}export default{async fetch(e,t,i){const n=await getMorphicWisdom(t);return n&&console.log("🌊",n.count,"patterns"),new Response("OK")}};
-          E
-          cat > m.json << 'M'
-          {"main_module":"w.js","bindings":[{"type":"d1","name":"AGENT_STATE","id":"4c67a2b1-6830-44ec-97b1-7c8f93722add"}],"compatibility_date":"2026-04-29"}
-          M
-          for w in holon-mesh-gateway mesh-metrics holon-vault; do
-            curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/$w" \
-              -H "Authorization: Bearer $CF_API_TOKEN" \
-              -F "metadata=@m.json;type=application/json" \
-              -F "w.js=@w.js;type=application/javascript+module"
-            echo "✅ $w"
+          for worker in mesh-metrics holon-vault; do
+            echo "🚀 Deploying $worker..."
+            
+            # Create worker code
+            cat > worker.js << 'JSEOF'
+async function getMorphicWisdom(env){
+  if(!env.AGENT_STATE)return null;
+  try{
+    const i=await env.AGENT_STATE.prepare(
+      "SELECT imprint_for_future,layer FROM morphic_field ORDER BY cycle_ts DESC LIMIT 10"
+    ).all();
+    if(!i.results?.length)return null;
+    console.log("🌊 Morficzne pole:",i.results.length,"patterns");
+    return{patterns:i.results.map(e=>e.imprint_for_future),count:i.results.length};
+  }catch(e){
+    console.error("❌ Morficzne pole:",e.message);
+    return null;
+  }
+}
+
+export default{
+  async fetch(request,env){
+    const wisdom=await getMorphicWisdom(env);
+    if(wisdom){
+      console.log("🌊 Loaded",wisdom.count,"patterns");
+    }
+    return new Response("OK with morficzne pole - "+(wisdom?wisdom.count+" patterns":"no wisdom"));
+  }
+};
+JSEOF
+            
+            # Create wrangler.toml
+            cat > wrangler.toml << TOMLEOF
+name = "$worker"
+main = "worker.js"
+compatibility_date = "2026-04-29"
+
+[[d1_databases]]
+binding = "AGENT_STATE"
+database_name = "agent-state"
+database_id = "4c67a2b1-6830-44ec-97b1-7c8f93722add"
+TOMLEOF
+            
+            # Deploy
+            wrangler deploy
+            
+            echo "✅ $worker deployed"
           done
+          
+          echo "🌊 MORFICZNE POLE DEPLOYED TO ALL WORKERS!"
